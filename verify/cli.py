@@ -135,7 +135,35 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_init_main(argv[1:])
     if argv and argv[0] == "list-checks":
         return _cmd_list_checks_main(argv[1:])
+    if argv and argv[0] == "list-devices":
+        return _cmd_list_devices_main(argv[1:])
     return _cmd_run_main(argv)
+
+
+def _cmd_list_devices_main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="verify list-devices",
+        description="List Playwright device presets usable in `ui` checks "
+                    "as `device: <name>`.")
+    p.add_argument("filter", nargs="?", default=None,
+                   help="Substring to filter by (case-insensitive)")
+    args = p.parse_args(argv)
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        sys.stderr.write("verify: playwright not installed. "
+                         "`pip install verify-cli[ui]` first.\n")
+        return 2
+    with sync_playwright() as pw:
+        names = sorted(pw.devices)
+    if args.filter:
+        f = args.filter.lower()
+        names = [n for n in names if f in n.lower()]
+    if not names:
+        sys.stderr.write(f"no devices matched {args.filter!r}\n")
+        return 1
+    for n in names:
+        print(n)
+    return 0
 
 
 def _cmd_init_main(argv: list[str]) -> int:

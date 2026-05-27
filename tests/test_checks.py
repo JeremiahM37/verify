@@ -169,3 +169,72 @@ def test_ui_check_reports_missing_url():
     r = ui_cmd.run({"name": "t"})
     assert r["ok"] is False
     assert "missing" in r["detail"]
+
+
+def test_ui_check_reports_unknown_engine():
+    r = ui_cmd.run({"name": "t", "url": "data:text/html,<p>hi</p>",
+                    "engine": "internet-explorer"})
+    assert r["ok"] is False
+    assert "unknown engine" in r["detail"]
+
+
+def test_ui_check_reports_unknown_device():
+    # Engine launch will succeed (chromium is installed), then device lookup
+    # should fail with a clear message before any steps run.
+    r = ui_cmd.run({"name": "t", "url": "data:text/html,<p>hi</p>",
+                    "device": "Definitely Not A Real Device"})
+    assert r["ok"] is False
+    assert "unknown device" in r["detail"]
+
+
+def test_ui_check_runs_against_data_url():
+    # Real Playwright launch — quick sanity that the runner end-to-end works
+    # against a static page with one step, with no project dependencies.
+    r = ui_cmd.run({
+        "name": "t",
+        "url": "data:text/html,<button id=b>click me</button>",
+        "steps": [
+            {"wait": "#b"},
+            {"expect_text": {"selector": "#b", "contains": "click"}},
+        ],
+    })
+    assert r["ok"] is True, r.get("detail")
+
+
+def test_ui_check_ime_type_drives_composition_events():
+    # The ime_type step dispatches composition + input events that a buggy
+    # consumer can mishandle. A correct app ends up with .value == commit.
+    r = ui_cmd.run({
+        "name": "t",
+        "url": "data:text/html,<input id=t>",
+        "steps": [
+            {"wait": "#t"},
+            {"ime_type": {"selector": "#t", "composition": "hel", "commit": "hello"}},
+            {"expect_text": {"selector": "#t", "equals": "hello"}},
+        ],
+    })
+    assert r["ok"] is True, r.get("detail")
+
+
+def test_ui_check_swipe_fires_touch_events():
+    # Swipe must produce real TouchEvents the page can subscribe to —
+    # mouse-based "drags" alone don't suffice for SPA touch handlers.
+    # base64-encoded data: URL avoids quote/special-char parsing issues.
+    import base64
+    html = (
+        b'<div id=d style="height:100vh;background:#eee">swipe me</div>'
+        b'<script>let n=0;window.addEventListener("touchmove",()=>{n++;'
+        b'document.getElementById("d").dataset.n=n});</script>'
+    )
+    url = "data:text/html;base64," + base64.b64encode(html).decode()
+    r = ui_cmd.run({
+        "name": "t",
+        "device": "Pixel 7",
+        "url": url,
+        "steps": [
+            {"wait": "#d"},
+            {"swipe": {"from": [200, 700], "to": [200, 200], "steps": 10}},
+            {"eval": "() => +document.getElementById('d').dataset.n >= 5"},
+        ],
+    })
+    assert r["ok"] is True, r.get("detail")

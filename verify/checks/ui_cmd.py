@@ -1,27 +1,43 @@
 """Ad-hoc UI check — drives a real headless browser through a sequence of
-steps declared inline, no script file required. The model people will reach
-for 90% of the time:
+steps declared inline, no script file required. Works for desktop and full
+mobile emulation (device viewport + user agent + touch events + isMobile
+rendering flag), across all three browser engines.
 
     - name: tabs-work
       type: ui
       url: "http://127.0.0.1:9105/term/7691"
-      viewport: { width: 414, height: 896 }       # phone-ish, optional
+      device: "Pixel 7"                          # Playwright preset → real
+                                                   # mobile UA + viewport + touch
+      engine: chromium                            # or webkit (Safari) / firefox
       steps:
         - wait: "#tabAdd"                          # wait for selector to appear
-        - click: "#tabAdd"                          # click it
+        - tap: "#tabAdd"                            # touch tap (real touch event)
         - wait: ".tab:nth-of-type(2)"               # wait for the new tab
         - expect_text: { selector: ".tab.active", contains: "claude-2" }
         - expect_count: { selector: ".tab", n: 3 }  # exact count
         - fill: { selector: "#myInput", text: "hello" }
+        - long_press: ".some-thing"                 # 600ms hold (configurable)
+        - swipe: { from: [200, 700], to: [200, 200] } # touch drag
+        - ime_type: { selector: "input", commit: "auto-corrected!" }  # simulate
+                                                                       # mobile keyboard
+                                                                       # composition flow
         - eval: "() => window.PORTS"                # arbitrary JS, must be truthy
-        - screenshot: "/tmp/state.png"              # optional debug aid
+        - screenshot: "/tmp/state.png"              # debug aid
         - sleep: 0.3                                # seconds
+
+For mobile UX:
+  device:    name from Playwright's device list (e.g. "Pixel 7",
+             "iPhone 13", "iPad Mini"). Sets viewport, userAgent,
+             deviceScaleFactor, isMobile, hasTouch. Override individual
+             fields with `viewport:`, `user_agent:`, etc.
+  engine:    chromium (default), webkit (mobile Safari emulation), or
+             firefox. Install each via `playwright install <engine>`.
 
 The check also fails if any uncaught JS error fires on the page during the
 run, since that's almost always a regression you wanted to catch.
 
 Requires playwright installed (`pip install verify-cli[ui]` then
-`playwright install chromium`).
+`playwright install chromium webkit firefox` for the engines you'll use).
 """
 from __future__ import annotations
 
@@ -42,17 +58,47 @@ async def _drive(cfg: dict, log: list) -> tuple[bool, list[str]]:
     from playwright.async_api import async_playwright
     url = cfg["url"]
     steps = cfg.get("steps") or []
-    viewport = cfg.get("viewport") or {"width": 1280, "height": 800}
     timeout = float(cfg.get("step_timeout", 10)) * 1000  # ms per step
     headless = cfg.get("headless", True)
+    engine = cfg.get("engine", "chromium")
     js_errors: list[str] = []
 
+    if engine not in ("chromium", "firefox", "webkit"):
+        log.append(f"unknown engine {engine!r}; supported: chromium, firefox, webkit")
+        return False, []
+
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=headless)
-        ctx = await browser.new_context(
-            viewport=viewport,
-            permissions=cfg.get("permissions") or ["clipboard-read", "clipboard-write"],
-        )
+        launcher = getattr(pw, engine)
+        try:
+            browser = await launcher.launch(headless=headless)
+        except Exception as e:
+            log.append(f"{engine} launch failed (did you `playwright install {engine}`?): {e}")
+            return False, []
+
+        # Build context kwargs — start from device preset if given, then
+        # allow individual overrides.
+        ctx_kwargs: dict = {}
+        device_name = cfg.get("device")
+        if device_name:
+            device = pw.devices.get(device_name)
+            if not device:
+                close_names = ", ".join(sorted(
+                    n for n in pw.devices if device_name.lower() in n.lower()
+                )[:5]) or "(none — try 'Pixel 7' or 'iPhone 13')"
+                log.append(f"unknown device {device_name!r}. Close matches: {close_names}")
+                await browser.close()
+                return False, []
+            ctx_kwargs.update(device)
+        if cfg.get("viewport"):     ctx_kwargs["viewport"]    = cfg["viewport"]
+        if cfg.get("user_agent"):   ctx_kwargs["user_agent"]  = cfg["user_agent"]
+        if cfg.get("locale"):       ctx_kwargs["locale"]      = cfg["locale"]
+        if cfg.get("timezone"):     ctx_kwargs["timezone_id"] = cfg["timezone"]
+        if cfg.get("has_touch") is not None: ctx_kwargs["has_touch"] = cfg["has_touch"]
+        if cfg.get("is_mobile")  is not None: ctx_kwargs["is_mobile"]  = cfg["is_mobile"]
+        ctx_kwargs.setdefault("viewport", {"width": 1280, "height": 800})
+        ctx_kwargs["permissions"] = cfg.get("permissions") or ["clipboard-read", "clipboard-write"]
+
+        ctx = await browser.new_context(**ctx_kwargs)
         page = await ctx.new_page()
         page.on("pageerror", lambda e: js_errors.append(f"pageerror: {e}"))
         page.on("console", lambda m: m.type == "error" and js_errors.append(f"console: {m.text}"))
@@ -103,6 +149,118 @@ async def _step(page, step, timeout, log, idx) -> bool:
         sel = step["click"]
         await page.wait_for_selector(sel, timeout=timeout)
         await page.click(sel, timeout=timeout); return True
+    if "tap" in step:
+        # Real touch tap — fires touchstart/touchend instead of mouse events.
+        # Requires context with has_touch=True (set by mobile devices) or it
+        # raises. Falls back to click in that case so configs work everywhere.
+        sel = step["tap"]
+        await page.wait_for_selector(sel, timeout=timeout)
+        try:
+            await page.tap(sel, timeout=timeout)
+        except Exception as e:
+            if "has_touch" in str(e).lower():
+                await page.click(sel, timeout=timeout)
+            else:
+                raise
+        return True
+    if "long_press" in step:
+        # Hold a finger on the element for `duration` ms (default 600).
+        sel = step["long_press"] if isinstance(step["long_press"], str) else step["long_press"]["selector"]
+        duration = 600
+        if isinstance(step["long_press"], dict):
+            duration = int(step["long_press"].get("duration", 600))
+        await page.wait_for_selector(sel, timeout=timeout)
+        box = await page.locator(sel).first.bounding_box()
+        if not box:
+            log.append(f"step {idx}: long_press {sel!r}: no bounding box")
+            return False
+        x = box["x"] + box["width"] / 2
+        y = box["y"] + box["height"] / 2
+        await page.mouse.move(x, y)
+        await page.mouse.down()
+        await asyncio.sleep(duration / 1000)
+        await page.mouse.up()
+        return True
+    if "swipe" in step:
+        # Touch drag from one point to another. Page.mouse in a mobile context
+        # dispatches as pointer events, which most page-level scroll handlers
+        # don't see — so we fire the raw TouchEvent sequence by JS instead,
+        # which does trigger browser scrolling and any custom touch listeners.
+        s = step["swipe"]
+        fx, fy = s["from"]
+        tx, ty = s["to"]
+        n = int(s.get("steps", 12))
+        await page.evaluate(
+            """({fx, fy, tx, ty, n}) => {
+                const el = document.elementFromPoint(fx, fy) || document.body;
+                const fire = (type, x, y) => {
+                    const t = new Touch({
+                        identifier: 0, target: el, clientX: x, clientY: y,
+                        pageX: x, pageY: y, screenX: x, screenY: y,
+                        radiusX: 1, radiusY: 1, rotationAngle: 0, force: 0.5,
+                    });
+                    el.dispatchEvent(new TouchEvent(type, {
+                        bubbles: true, cancelable: true, composed: true,
+                        touches: type === 'touchend' ? [] : [t],
+                        targetTouches: type === 'touchend' ? [] : [t],
+                        changedTouches: [t],
+                    }));
+                };
+                fire('touchstart', fx, fy);
+                for (let i = 1; i <= n; i++) {
+                    const x = fx + (tx - fx) * (i / n);
+                    const y = fy + (ty - fy) * (i / n);
+                    fire('touchmove', x, y);
+                }
+                fire('touchend', tx, ty);
+            }""", {"fx": fx, "fy": fy, "tx": tx, "ty": ty, "n": n},
+        )
+        return True
+    if "ime_type" in step:
+        # Simulate Android/iOS IME (predictive keyboard) composition flow.
+        # IME inputs fire compositionstart/compositionupdate/compositionend
+        # instead of clean keystrokes. The exact sequence we replicate:
+        #   focus → compositionstart → multiple compositionupdate (typing) →
+        #   compositionend with the committed/auto-corrected text.
+        # Useful for catching the Gboard duplicate-word class of bug.
+        e = step["ime_type"]
+        sel    = e["selector"]
+        commit = e.get("commit", "")
+        compose = e.get("composition", commit)
+        await page.wait_for_selector(sel, timeout=timeout)
+        await page.evaluate(
+            """([sel, compose, commit]) => {
+                const el = document.querySelector(sel);
+                if (!el) throw new Error('no element');
+                el.focus();
+                const fire = (type, data) => {
+                    el.dispatchEvent(new CompositionEvent(type, { data, bubbles: true }));
+                };
+                fire('compositionstart', '');
+                // Step the composition in chunks so input handlers see it grow
+                for (let i = 1; i <= compose.length; i++) {
+                    fire('compositionupdate', compose.slice(0, i));
+                    // Mirror what real browsers do: also fire `input` with the
+                    // intermediate value via the value setter (works for both
+                    // <input> and <textarea>).
+                    el.value = compose.slice(0, i);
+                    el.dispatchEvent(new InputEvent('input', {
+                        inputType: 'insertCompositionText',
+                        data: compose.slice(0, i), bubbles: true,
+                    }));
+                }
+                // Commit: replace composition with `commit` (could differ if
+                // autocorrect changed the word).
+                el.value = commit;
+                fire('compositionend', commit);
+                el.dispatchEvent(new InputEvent('input', {
+                    inputType: 'insertReplacementText',
+                    data: commit, bubbles: true,
+                }));
+            }""",
+            [sel, compose, commit],
+        )
+        return True
     if "fill" in step:
         f = step["fill"]
         sel, text = (f["selector"], f["text"]) if isinstance(f, dict) else f
@@ -120,7 +278,16 @@ async def _step(page, step, timeout, log, idx) -> bool:
         sel = e["selector"]
         want = e.get("contains") or e.get("equals")
         await page.wait_for_selector(sel, timeout=timeout)
-        got = (await page.text_content(sel) or "").strip()
+        # For form fields the "text" the user cares about is the value, not
+        # textContent (which is empty for <input>). Auto-detect either case.
+        got = (await page.evaluate(
+            """(sel) => {
+                const el = document.querySelector(sel);
+                if (!el) return '';
+                if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return el.value || '';
+                return el.textContent || '';
+            }""", sel,
+        ) or "").strip()
         if e.get("equals") is not None:
             ok = got == want
         else:
