@@ -333,30 +333,47 @@ async def _step(page, step, timeout, log, idx) -> bool:
                 if (!el) throw new Error('no element');
                 el.focus();
                 if (mode === 'autocorrect') {
-                    // Real Gboard pattern: each typed char fires its own
-                    // insertText event, then autocorrect fires a SINGLE
-                    // insertReplacementText with the corrected word.
+                    // Real Gboard pattern observed on actual Android phones:
+                    // each typed char fires a single-char insertText event,
+                    // then autocorrect fires another insertText with the
+                    // DIFF — only the suffix that changed, not a replacement
+                    // event. So typing "teting" then autocorrecting to
+                    // "testing " fires: insertText("t"), ("e"), ("t"),
+                    // ("i"), ("n"), ("g"), then insertText("sting ").
+                    // This is what produces the "tetingsting" bug — apps
+                    // that treat each insertText as PTY input append every
+                    // event's data.
                     let val = el.value || '';
+                    // Phase 1: type each char
                     for (const ch of compose) {
                         val += ch;
                         el.value = val;
+                        el.dispatchEvent(new InputEvent('beforeinput', {
+                            inputType: 'insertText', data: ch,
+                            bubbles: true, cancelable: true,
+                        }));
                         el.dispatchEvent(new InputEvent('input', {
                             inputType: 'insertText', data: ch, bubbles: true,
                         }));
                     }
-                    // Now the replacement event. Chrome/Gecko also fire a
-                    // beforeinput with getTargetRanges; some apps rely on
-                    // that to know what range to replace. We fire both for
-                    // completeness.
-                    el.dispatchEvent(new InputEvent('beforeinput', {
-                        inputType: 'insertReplacementText',
-                        data: commit, bubbles: true, cancelable: true,
-                    }));
-                    el.value = val.slice(0, val.length - compose.length) + commit;
-                    el.dispatchEvent(new InputEvent('input', {
-                        inputType: 'insertReplacementText',
-                        data: commit, bubbles: true,
-                    }));
+                    // Phase 2: autocorrect fires insertText with the diff.
+                    // Find the longest common prefix between `compose` and
+                    // `commit`; the suffix of `commit` beyond that prefix
+                    // is what Gboard sends.
+                    let i = 0;
+                    while (i < compose.length && i < commit.length && compose[i] === commit[i]) i++;
+                    const diff = commit.slice(i);
+                    if (diff) {
+                        val = compose.slice(0, i) + commit.slice(i);
+                        el.value = val;
+                        el.dispatchEvent(new InputEvent('beforeinput', {
+                            inputType: 'insertText', data: diff,
+                            bubbles: true, cancelable: true,
+                        }));
+                        el.dispatchEvent(new InputEvent('input', {
+                            inputType: 'insertText', data: diff, bubbles: true,
+                        }));
+                    }
                     return;
                 }
                 // Default mode: composition events
