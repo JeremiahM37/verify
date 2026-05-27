@@ -308,43 +308,70 @@ async def _step(page, step, timeout, log, idx) -> bool:
         )
         return True
     if "ime_type" in step:
-        # Simulate Android/iOS IME (predictive keyboard) composition flow.
-        # IME inputs fire compositionstart/compositionupdate/compositionend
-        # instead of clean keystrokes. The exact sequence we replicate:
-        #   focus → compositionstart → multiple compositionupdate (typing) →
-        #   compositionend with the committed/auto-corrected text.
-        # Useful for catching the Gboard duplicate-word class of bug.
+        # Simulate Android/iOS IME — composition flow OR autocorrect-replace.
+        #   mode: composition (default) — compositionstart/update/end
+        #   mode: autocorrect           — type chars one at a time as
+        #                                 insertText events, then dispatch
+        #                                 insertReplacementText with the
+        #                                 corrected word. This is what real
+        #                                 Gboard does and is the pattern that
+        #                                 produces the "tetingsting" class
+        #                                 of bug (typed word stays, corrected
+        #                                 suffix gets appended).
         e = step["ime_type"]
         sel    = e["selector"]
         commit = e.get("commit", "")
         compose = e.get("composition", commit)
+        mode   = e.get("mode", "composition")
         # state="attached" not "visible" — many input targets (xterm.js's
         # helper textarea is the canonical example) are positioned off-screen
         # and would never pass a visibility check.
         await page.wait_for_selector(sel, state="attached", timeout=timeout)
         await page.evaluate(
-            """([sel, compose, commit]) => {
+            """([sel, compose, commit, mode]) => {
                 const el = document.querySelector(sel);
                 if (!el) throw new Error('no element');
                 el.focus();
+                if (mode === 'autocorrect') {
+                    // Real Gboard pattern: each typed char fires its own
+                    // insertText event, then autocorrect fires a SINGLE
+                    // insertReplacementText with the corrected word.
+                    let val = el.value || '';
+                    for (const ch of compose) {
+                        val += ch;
+                        el.value = val;
+                        el.dispatchEvent(new InputEvent('input', {
+                            inputType: 'insertText', data: ch, bubbles: true,
+                        }));
+                    }
+                    // Now the replacement event. Chrome/Gecko also fire a
+                    // beforeinput with getTargetRanges; some apps rely on
+                    // that to know what range to replace. We fire both for
+                    // completeness.
+                    el.dispatchEvent(new InputEvent('beforeinput', {
+                        inputType: 'insertReplacementText',
+                        data: commit, bubbles: true, cancelable: true,
+                    }));
+                    el.value = val.slice(0, val.length - compose.length) + commit;
+                    el.dispatchEvent(new InputEvent('input', {
+                        inputType: 'insertReplacementText',
+                        data: commit, bubbles: true,
+                    }));
+                    return;
+                }
+                // Default mode: composition events
                 const fire = (type, data) => {
                     el.dispatchEvent(new CompositionEvent(type, { data, bubbles: true }));
                 };
                 fire('compositionstart', '');
-                // Step the composition in chunks so input handlers see it grow
                 for (let i = 1; i <= compose.length; i++) {
                     fire('compositionupdate', compose.slice(0, i));
-                    // Mirror what real browsers do: also fire `input` with the
-                    // intermediate value via the value setter (works for both
-                    // <input> and <textarea>).
                     el.value = compose.slice(0, i);
                     el.dispatchEvent(new InputEvent('input', {
                         inputType: 'insertCompositionText',
                         data: compose.slice(0, i), bubbles: true,
                     }));
                 }
-                // Commit: replace composition with `commit` (could differ if
-                // autocorrect changed the word).
                 el.value = commit;
                 fire('compositionend', commit);
                 el.dispatchEvent(new InputEvent('input', {
@@ -352,7 +379,7 @@ async def _step(page, step, timeout, log, idx) -> bool:
                     data: commit, bubbles: true,
                 }));
             }""",
-            [sel, compose, commit],
+            [sel, compose, commit, mode],
         )
         return True
     if "fill" in step:
