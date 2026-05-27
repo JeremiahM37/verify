@@ -318,7 +318,10 @@ async def _step(page, step, timeout, log, idx) -> bool:
         sel    = e["selector"]
         commit = e.get("commit", "")
         compose = e.get("composition", commit)
-        await page.wait_for_selector(sel, timeout=timeout)
+        # state="attached" not "visible" — many input targets (xterm.js's
+        # helper textarea is the canonical example) are positioned off-screen
+        # and would never pass a visibility check.
+        await page.wait_for_selector(sel, state="attached", timeout=timeout)
         await page.evaluate(
             """([sel, compose, commit]) => {
                 const el = document.querySelector(sel);
@@ -409,10 +412,63 @@ async def _step(page, step, timeout, log, idx) -> bool:
         if not expr.strip().startswith(("(", "function", "async ")) and "=>" not in expr:
             expr = f"() => ({expr})"
         result = await page.evaluate(expr)
+        # Two shapes accepted:
+        #  - truthy/falsy primitive → pass/fail with no detail
+        #  - { ok: bool, detail: str } → pass/fail with structured message
+        # The structured shape lets tests describe exactly what went wrong,
+        # which is the difference between "eval failed" and a fix-able report.
+        if isinstance(result, dict) and "ok" in result:
+            ok = bool(result["ok"])
+            if not ok:
+                detail = result.get("detail") or result.get("message") or ""
+                log.append(f"step {idx}: eval failed: {detail}")
+            return ok
         ok = bool(result)
         if not ok:
             log.append(f"step {idx}: eval returned falsy: {result!r}")
         return ok
+    if "expect_attr" in step:
+        # Declarative attribute assertion — cleaner than writing eval just to
+        # check getAttribute. {selector: '.x', attr: 'autocorrect', equals: 'off'}
+        # also supports `not_equals`, `contains`, `present`, `absent`.
+        e = step["expect_attr"]
+        sel = e["selector"]
+        attr = e["attr"]
+        await page.wait_for_selector(sel, state="attached", timeout=timeout)
+        got = await page.evaluate(
+            "([s,a]) => { const el = document.querySelector(s); "
+            "return el ? el.getAttribute(a) : '__VERIFY_NO_ELEMENT__'; }",
+            [sel, attr],
+        )
+        if got == "__VERIFY_NO_ELEMENT__":
+            log.append(f"step {idx}: expect_attr: no element matches {sel!r}")
+            return False
+        if "present" in e:
+            ok = (got is not None) == bool(e["present"])
+            if not ok:
+                log.append(f"step {idx}: expect_attr {sel!r}[{attr}]: "
+                           f"want {'present' if e['present'] else 'absent'}, got {got!r}")
+            return ok
+        if "equals" in e:
+            ok = got == e["equals"]
+            if not ok:
+                log.append(f"step {idx}: expect_attr {sel!r}[{attr}]: "
+                           f"want {e['equals']!r}, got {got!r}")
+            return ok
+        if "not_equals" in e:
+            ok = got != e["not_equals"]
+            if not ok:
+                log.append(f"step {idx}: expect_attr {sel!r}[{attr}]: "
+                           f"must NOT equal {e['not_equals']!r}, but does")
+            return ok
+        if "contains" in e:
+            ok = got is not None and e["contains"] in got
+            if not ok:
+                log.append(f"step {idx}: expect_attr {sel!r}[{attr}]: "
+                           f"want to contain {e['contains']!r}, got {got!r}")
+            return ok
+        log.append(f"step {idx}: expect_attr missing one of: equals/not_equals/contains/present")
+        return False
     if "screenshot" in step:
         path = step["screenshot"]
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
