@@ -1,0 +1,40 @@
+# Example: any web app — backend + frontend. Mix of unit, integration,
+# and browser-driven checks. The `ui` check is the "Claude actually clicks
+# things" part: it drives a real headless Chromium through the steps.
+
+checks:
+  - name: tests
+    type: pytest
+
+  - name: api-healthy
+    type: http
+    targets:
+      - url: "http://127.0.0.1:8080/api/health"
+        status: 200
+
+  - name: login-flow
+    type: ui
+    url: "http://127.0.0.1:8080/"
+    viewport: { width: 1280, height: 800 }
+    steps:
+      - wait: 'input[name="email"]'
+      - fill: { selector: 'input[name="email"]',    text: "demo@example.test" }
+      - fill: { selector: 'input[name="password"]', text: "demo-password" }
+      - click: 'button[type="submit"]'
+      - wait: ".dashboard"
+      - expect_text: { selector: ".user-greeting", contains: "Welcome" }
+
+  - name: create-item-flow
+    type: ui
+    url: "http://127.0.0.1:8080/items"
+    steps:
+      - wait: "#new-item"
+      - click: "#new-item"
+      - fill: { selector: 'input[name="title"]', text: "verify-test item" }
+      - click: 'button[type="submit"]'
+      - wait: ".item-list .item"
+      - expect_count: { selector: ".item-list .item", n: 1 }
+      - expect_text: { selector: ".item-list .item:first-child .title",
+                       contains: "verify-test item" }
+      # Snapshot for debugging on failure
+      - screenshot: "/tmp/verify-create-item.png"
