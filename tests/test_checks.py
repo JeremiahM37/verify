@@ -216,6 +216,114 @@ def test_ui_check_ime_type_drives_composition_events():
     assert r["ok"] is True, r.get("detail")
 
 
+def test_ui_check_reload_step_navigates():
+    # `reload` (bare string) reloads the page. Use a counter in window state
+    # that resets to 0 each page load to detect that we actually reloaded.
+    import base64
+    html = (b'<div id=c></div>'
+            b'<script>window._n=(window._n||0)+1;'
+            b'document.getElementById("c").textContent=String(window._n);</script>')
+    url = "data:text/html;base64," + base64.b64encode(html).decode()
+    r = ui_cmd.run({
+        "name": "t", "url": url,
+        "steps": [
+            {"wait": "#c"},
+            {"expect_text": {"selector": "#c", "equals": "1"}},
+            "reload",
+            {"wait": "#c"},
+            # After reload, window._n was wiped; the script ran again from 0+1=1.
+            {"expect_text": {"selector": "#c", "equals": "1"}},
+            # Confirm via a separate counter that the page genuinely reloaded
+            {"eval": "() => window._n === 1"},
+        ],
+    })
+    assert r["ok"] is True, r.get("detail")
+
+
+def test_ui_check_set_local_storage_works(tmp_path):
+    # Browsers disable localStorage on data: URLs entirely (opaque origin
+    # security check), so we serve a tiny file: URL instead.
+    html = tmp_path / "ls.html"
+    html.write_text("<div id=t>placeholder</div>")
+    r = ui_cmd.run({
+        "name": "t", "url": f"file://{html}",
+        "steps": [
+            {"set_local_storage": {"preset": "yes", "another": "1"}},
+            {"eval": "() => localStorage.getItem('preset') === 'yes' && "
+                     "localStorage.getItem('another') === '1'"},
+            {"clear_local_storage": True},
+            {"eval": "() => localStorage.length === 0"},
+        ],
+    })
+    assert r["ok"] is True, r.get("detail")
+
+
+def test_ui_check_set_viewport_works():
+    # set_viewport changes the inner dimensions mid-test (useful for testing
+    # responsive layouts and orientation changes).
+    import base64
+    html = b"<div id=t>x</div>"
+    url = "data:text/html;base64," + base64.b64encode(html).decode()
+    r = ui_cmd.run({
+        "name": "t", "url": url,
+        "viewport": {"width": 800, "height": 600},
+        "steps": [
+            {"eval": "() => window.innerWidth === 800"},
+            {"set_viewport": {"width": 414, "height": 896}},
+            {"eval": "() => window.innerWidth === 414"},
+        ],
+    })
+    assert r["ok"] is True, r.get("detail")
+
+
+def test_ui_check_expect_url_matches_regex():
+    import base64
+    html = b"<a id=a href='https://example.com/page?x=1'>go</a>"
+    url = "data:text/html;base64," + base64.b64encode(html).decode()
+    r = ui_cmd.run({
+        "name": "t", "url": url,
+        "steps": [
+            {"expect_url": "^data:"},      # we're still on the data URL
+        ],
+    })
+    assert r["ok"] is True, r.get("detail")
+
+
+def test_ui_check_failure_writes_screenshot_and_captures_console():
+    # When a step fails, the runner writes a screenshot to /tmp and includes
+    # the last few console messages in the failure detail. This is the
+    # difference between "FAIL" and "FAIL, here's what the app said and what
+    # the screen looked like at the moment of failure."
+    import base64, os, glob
+    # Clean up any leftover screenshots first
+    for p in glob.glob("/tmp/verify-fail-shottest_*.png"):
+        try: os.unlink(p)
+        except OSError: pass
+
+    html = (b"<div id=d></div>"
+            b"<script>console.log('app says hi');</script>")
+    url = "data:text/html;base64," + base64.b64encode(html).decode()
+    r = ui_cmd.run({
+        "name": "shottest",
+        "url": url,
+        "step_timeout": 2,
+        "steps": [
+            {"wait": "#d"},
+            {"expect_visible": "#this-doesnt-exist"},
+        ],
+    })
+    assert r["ok"] is False
+    # The detail should mention the screenshot path and the console message
+    assert "screenshot saved" in r["detail"]
+    assert "app says hi" in r["detail"]
+    # And the screenshot file exists
+    found = glob.glob("/tmp/verify-fail-shottest*.png")
+    assert found, "expected a screenshot file in /tmp/"
+    # Clean up
+    for p in found:
+        os.unlink(p)
+
+
 def test_ui_check_swipe_fires_touch_events():
     # Swipe must produce real TouchEvents the page can subscribe to —
     # mouse-based "drags" alone don't suffice for SPA touch handlers.

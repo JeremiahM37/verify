@@ -62,6 +62,9 @@ async def _drive(cfg: dict, log: list) -> tuple[bool, list[str]]:
     headless = cfg.get("headless", True)
     engine = cfg.get("engine", "chromium")
     js_errors: list[str] = []
+    console_messages: list[str] = []
+    screenshot_on_failure = cfg.get("screenshot_on_failure", True)
+    check_name = cfg.get("name", "ui")
 
     if engine not in ("chromium", "firefox", "webkit"):
         log.append(f"unknown engine {engine!r}; supported: chromium, firefox, webkit")
@@ -101,12 +104,32 @@ async def _drive(cfg: dict, log: list) -> tuple[bool, list[str]]:
         ctx = await browser.new_context(**ctx_kwargs)
         page = await ctx.new_page()
         page.on("pageerror", lambda e: js_errors.append(f"pageerror: {e}"))
-        page.on("console", lambda m: m.type == "error" and js_errors.append(f"console: {m.text}"))
+        def _on_console(m):
+            line = f"[{m.type}] {m.text}"
+            console_messages.append(line)
+            if m.type == "error":
+                js_errors.append(f"console.error: {m.text}")
+        page.on("console", _on_console)
+
+        async def _shot_on_failure(step_idx: int | None = None):
+            if not screenshot_on_failure:
+                return
+            import re, time
+            safe = re.sub(r"[^a-zA-Z0-9_-]", "_", check_name)[:60]
+            suffix = f"_step{step_idx}" if step_idx is not None else ""
+            path = f"/tmp/verify-fail-{safe}{suffix}-{int(time.time())}.png"
+            try:
+                await page.screenshot(path=path, full_page=False)
+                log.append(f"screenshot saved: {path}")
+            except Exception as e:
+                log.append(f"(couldn't capture screenshot: {e})")
 
         try:
             await page.goto(url, timeout=timeout)
         except Exception as e:
             log.append(f"goto {url} failed: {e}")
+            await _shot_on_failure()
+            _append_console_tail(log, console_messages)
             await browser.close()
             return False, js_errors
 
@@ -117,6 +140,8 @@ async def _drive(cfg: dict, log: list) -> tuple[bool, list[str]]:
                 log.append(f"step {i} ({step!r}) raised: {e}")
                 ok = False
             if not ok:
+                await _shot_on_failure(step_idx=i)
+                _append_console_tail(log, console_messages)
                 await browser.close()
                 return False, js_errors
 
@@ -126,14 +151,29 @@ async def _drive(cfg: dict, log: list) -> tuple[bool, list[str]]:
         log.append(f"{len(js_errors)} JS error(s) on page:")
         for e in js_errors[:5]:
             log.append(f"  - {e}")
+        _append_console_tail(log, console_messages)
         return False, js_errors
     return True, js_errors
 
 
+def _append_console_tail(log: list[str], console: list[str], n: int = 8) -> None:
+    """Tack the last N browser-console messages onto the failure log so the
+    user can see what the app was saying at the moment things broke."""
+    if not console:
+        return
+    log.append(f"last {min(n, len(console))} console messages:")
+    for line in console[-n:]:
+        log.append(f"  > {line}")
+
+
 async def _step(page, step, timeout, log, idx) -> bool:
     """Run one step; return True if it succeeded."""
+    # Bare-string shortcuts for argument-less commands (reload / back /
+    # forward). Anything else as a bare string is wait-for-selector.
     if isinstance(step, str):
-        # Bare-string shorthand for "wait for this selector"
+        if step == "reload":  await page.reload(timeout=timeout); return True
+        if step == "back":    await page.go_back(timeout=timeout); return True
+        if step == "forward": await page.go_forward(timeout=timeout); return True
         await page.wait_for_selector(step, timeout=timeout)
         return True
     if not isinstance(step, dict):
@@ -143,6 +183,57 @@ async def _step(page, step, timeout, log, idx) -> bool:
     # Normalize: each dict has exactly one action key
     if "goto" in step:
         await page.goto(step["goto"], timeout=timeout); return True
+    if "reload" in step:
+        await page.reload(timeout=timeout); return True
+    if "back" in step:
+        await page.go_back(timeout=timeout); return True
+    if "forward" in step:
+        await page.go_forward(timeout=timeout); return True
+    if "wait_for_url" in step:
+        # Wait until the URL matches a substring or regex.
+        import re
+        pat = step["wait_for_url"]
+        deadline = asyncio.get_event_loop().time() + timeout / 1000
+        while asyncio.get_event_loop().time() < deadline:
+            u = page.url
+            if re.search(pat, u):
+                return True
+            await asyncio.sleep(0.1)
+        log.append(f"step {idx}: wait_for_url {pat!r}: timed out, url is {page.url}")
+        return False
+    if "expect_url" in step:
+        import re
+        pat = step["expect_url"]
+        ok = bool(re.search(pat, page.url))
+        if not ok:
+            log.append(f"step {idx}: expect_url {pat!r}: actual url is {page.url}")
+        return ok
+    if "set_viewport" in step:
+        # For rotation testing: {width: 896, height: 414} switches landscape.
+        v = step["set_viewport"]
+        await page.set_viewport_size({"width": int(v["width"]), "height": int(v["height"])})
+        return True
+    if "scroll" in step:
+        # Programmatic scroll the page (vs `swipe` which fires real TouchEvents).
+        # {x: 0, y: 1000} scrolls to that position; {by: [0, 500]} scrolls by delta.
+        s = step["scroll"]
+        if "by" in s:
+            dx, dy = s["by"]
+            await page.evaluate(f"() => window.scrollBy({dx}, {dy})")
+        else:
+            x = int(s.get("x", 0)); y = int(s.get("y", 0))
+            await page.evaluate(f"() => window.scrollTo({x}, {y})")
+        return True
+    if "set_local_storage" in step:
+        # Preload state. Useful for skipping login flows etc.
+        for k, v in step["set_local_storage"].items():
+            await page.evaluate(
+                f"([k, v]) => localStorage.setItem(k, v)", [k, str(v)]
+            )
+        return True
+    if "clear_local_storage" in step:
+        await page.evaluate("() => localStorage.clear()")
+        return True
     if "wait" in step:
         await page.wait_for_selector(step["wait"], timeout=timeout); return True
     if "click" in step:
