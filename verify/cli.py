@@ -28,10 +28,31 @@ def _load(path: str) -> dict:
     if not p.exists():
         sys.stderr.write(f"verify: config not found: {path}\n")
         sys.exit(2)
-    return yaml.safe_load(p.read_text()) or {}
+    try:
+        data = yaml.safe_load(p.read_text())
+    except yaml.YAMLError as e:
+        sys.stderr.write(f"verify: invalid YAML in {path}:\n  {e}\n")
+        sys.exit(2)
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        sys.stderr.write(
+            f"verify: {path}: top level must be a mapping (got {type(data).__name__})\n"
+        )
+        sys.exit(2)
+    checks = data.get("checks")
+    if checks is not None and not isinstance(checks, list):
+        sys.stderr.write(
+            f"verify: {path}: 'checks' must be a list (got {type(checks).__name__})\n"
+        )
+        sys.exit(2)
+    return data
 
 
 def _run_check(cfg: dict) -> dict:
+    if not isinstance(cfg, dict):
+        return {"name": "?", "ok": False,
+                "detail": f"check entry must be a mapping, got {type(cfg).__name__}: {cfg!r}"}
     ctype = cfg.get("type", "shell")
     if ctype not in REGISTRY:
         return {"name": cfg.get("name", ctype), "ok": False,
@@ -64,7 +85,96 @@ def _format_report(results: list[dict]) -> str:
     return "\n".join(out)
 
 
+STARTER_CONFIG = """\
+# `.verify.yaml` — what to run when someone (or some AI) is about to claim
+# this project is "done". `verify` reads this file and exits 0 only if every
+# check passes. See https://github.com/JeremiahM37/verify for the full schema.
+
+checks:
+  # Unit tests
+  - name: tests
+    type: pytest
+    # run: "pytest -q"       # uncomment to override default
+
+  # Your service is running
+  # - name: service-active
+  #   type: systemd
+  #   units: [my-service]
+
+  # Recent logs are clean
+  # - name: no-recent-errors
+  #   type: journalctl
+  #   units: [my-service]
+  #   since: "1 min ago"
+  #   forbid: [ERROR, Traceback, CRITICAL]
+
+  # API endpoints respond correctly
+  # - name: endpoints
+  #   type: http
+  #   targets:
+  #     - { url: "http://127.0.0.1:8000/healthz",
+  #         status: 200, contains: '"ok":true' }
+
+  # UI actually works (drives a real headless browser through your flow)
+  # - name: critical-flow
+  #   type: ui
+  #   url: "http://127.0.0.1:8000/"
+  #   steps:
+  #     - wait: 'button[type="submit"]'
+  #     - click: 'button[type="submit"]'
+  #     - wait: ".success"
+"""
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # Explicit subcommand dispatch — keeps the default `verify` invocation
+    # (no subcommand) cleanly accepting a positional config arg without
+    # argparse's awkward subparser+positional collision.
+    if argv and argv[0] == "init":
+        return _cmd_init_main(argv[1:])
+    if argv and argv[0] == "list-checks":
+        return _cmd_list_checks_main(argv[1:])
+    return _cmd_run_main(argv)
+
+
+def _cmd_init_main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="verify init",
+        description="Scaffold a starter .verify.yaml in the current project.")
+    p.add_argument("path", nargs="?", default=".verify.yaml",
+                   help="Where to write (default: ./.verify.yaml)")
+    p.add_argument("--force", "-f", action="store_true",
+                   help="Overwrite if the file already exists")
+    args = p.parse_args(argv)
+    target = Path(args.path)
+    if target.exists() and not args.force:
+        sys.stderr.write(f"verify: {target} already exists (use --force to overwrite)\n")
+        return 2
+    target.write_text(STARTER_CONFIG)
+    print(f"wrote {target}")
+    print("edit it to match your project, then run `verify`")
+    return 0
+
+
+def _cmd_list_checks_main(argv: list[str]) -> int:
+    argparse.ArgumentParser(prog="verify list-checks").parse_args(argv)
+    print("verify check types:\n")
+    for name in sorted(REGISTRY):
+        mod = REGISTRY[name].__module__
+        doc = sys.modules[mod].__doc__ or ""
+        summary = next((ln.strip() for ln in doc.splitlines() if ln.strip()), "")
+        print(f"  {name:12s}  {summary}")
+    print("\nFull schema for each type:")
+    for name in sorted(REGISTRY):
+        mod = REGISTRY[name].__module__
+        doc = (sys.modules[mod].__doc__ or "").strip()
+        if doc:
+            print(f"\n── {name} ──")
+            print(doc)
+    return 0
+
+
+def _cmd_run_main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(prog="verify",
         description="End-to-end verify your project before claiming done.")
     p.add_argument("config", nargs="?", default=".verify.yaml",

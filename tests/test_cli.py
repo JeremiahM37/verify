@@ -103,3 +103,60 @@ def test_missing_config_exits_two(tmp_path, capsys):
     with pytest.raises(SystemExit) as e:
         main([str(tmp_path / "no-such-file.yaml")])
     assert e.value.code == 2
+
+
+def test_invalid_yaml_exits_two_with_clean_error(tmp_path, capsys):
+    cfg = tmp_path / ".verify.yaml"
+    cfg.write_text("this: is: not: valid: yaml: at: all\n")
+    with pytest.raises(SystemExit) as e:
+        main([str(cfg)])
+    assert e.value.code == 2
+    err = capsys.readouterr().err
+    assert "invalid YAML" in err
+
+
+def test_top_level_must_be_mapping(tmp_path, capsys):
+    cfg = tmp_path / ".verify.yaml"
+    cfg.write_text("- just a list at top level\n")
+    with pytest.raises(SystemExit) as e:
+        main([str(cfg)])
+    assert e.value.code == 2
+    assert "must be a mapping" in capsys.readouterr().err
+
+
+def test_checks_must_be_a_list(tmp_path, capsys):
+    cfg = tmp_path / ".verify.yaml"
+    cfg.write_text("checks: not a list\n")
+    with pytest.raises(SystemExit) as e:
+        main([str(cfg)])
+    assert e.value.code == 2
+    assert "'checks' must be a list" in capsys.readouterr().err
+
+
+def test_init_scaffolds_a_starter_config(tmp_path, capsys):
+    target = tmp_path / ".verify.yaml"
+    rc = main(["init", str(target)])
+    assert rc == 0
+    text = target.read_text()
+    assert "checks:" in text
+    assert "pytest" in text
+
+
+def test_init_refuses_to_overwrite_without_force(tmp_path, capsys):
+    target = tmp_path / ".verify.yaml"
+    target.write_text("existing content\n")
+    rc = main(["init", str(target)])
+    assert rc == 2
+    assert "already exists" in capsys.readouterr().err
+    # --force overwrites
+    rc = main(["init", str(target), "--force"])
+    assert rc == 0
+    assert "existing content" not in target.read_text()
+
+
+def test_list_checks_shows_all_types(capsys):
+    rc = main(["list-checks"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    for name in ("pytest", "shell", "systemd", "journalctl", "http", "ui", "playwright"):
+        assert name in out

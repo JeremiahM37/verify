@@ -1,0 +1,26 @@
+# verify's own verify config — dogfooding. Run `verify` from this directory
+# and the suite below proves all the moving parts work against a real venv.
+
+checks:
+  - name: unit-tests
+    type: pytest
+    run: ".venv/bin/pytest -q"
+
+  - name: cli-help-works
+    type: shell
+    run: ".venv/bin/verify --version"
+
+  - name: init-scaffold-works
+    type: shell
+    run: |
+      set -e
+      tmp=$(mktemp -d)
+      .venv/bin/verify init "$tmp/.verify.yaml"
+      grep -q '^checks:' "$tmp/.verify.yaml"
+      .venv/bin/verify init "$tmp/.verify.yaml" 2>&1 | grep -q 'already exists' || exit 1
+      .venv/bin/verify init "$tmp/.verify.yaml" --force
+      rm -rf "$tmp"
+
+  - name: list-checks-output
+    type: shell
+    run: ".venv/bin/verify list-checks | grep -q '^  ui '"
