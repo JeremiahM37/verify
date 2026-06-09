@@ -1,0 +1,36 @@
+# Example: blink firmware on an STM32 Nucleo, simulated in Renode.
+#
+# Prerequisites:
+#   - Renode installed (https://renode.io/#downloads)
+#   - A .resc script in the project root that loads the .elf and starts.
+#
+# Run with: verify run examples/stm32.verify.yaml
+backend: renode
+
+launch:
+  command: ./demo.resc
+  wait_after: 2
+
+options:
+  renode:
+    monitor_port: 1234
+    # Set to the analyzer path for boards with an LCD, e.g. "sysbus.lcd"
+    # frame_analyzer: sysbus.lcd
+
+steps:
+  - name: boot banner appears on UART
+    expect:
+      log_contains: "Booting firmware"
+      no_log_contains: "HardFault"
+
+  - name: LED toggles after init
+    actions:
+      - wait: 2
+    expect:
+      log_contains: "LED on"
+
+  - name: no panics during run
+    actions:
+      - wait: 3
+    expect:
+      no_log_contains: "panic"

@@ -1,0 +1,35 @@
+# Example: a Qt or GTK desktop app running inside Xvfb so the test never
+# touches the developer's real display.
+#
+# Run with: verify run examples/linux_desktop.verify.yaml
+backend: linux_desktop
+
+launch:
+  command: ./build/myapp
+  wait_after: 2
+
+options:
+  linux_desktop:
+    display: ":99"
+    screen_size: [1280, 800]
+
+steps:
+  - name: main window opens
+    expect:
+      vision: "the application's main window is visible with a menu bar and contents drawn"
+
+  - name: file > open dialog appears
+    actions:
+      - click: { locate: { vision: "the File menu in the menu bar" } }
+      - wait: 0.5
+      - click: { locate: { vision: "the Open menu item" } }
+      - wait: 1
+    expect:
+      vision: "a file-picker dialog is open in front of the main window"
+
+  - name: dialog closes on cancel
+    actions:
+      - key: escape
+      - wait: 0.5
+    expect:
+      vision: "file-picker dialog is gone, main window is the only visible window"

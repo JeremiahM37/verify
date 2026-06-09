@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sample app — good</title>
+  <style>
+    body { font-family: sans-serif; padding: 2em; }
+    .dashboard { background: #eaffea; padding: 1em; border-radius: 8px; }
+    button { padding: 0.5em 1em; font-size: 1em; }
+  </style>
+</head>
+<body>
+  <h1>Welcome back</h1>
+  <div class="dashboard" id="dash">
+    <p>Your dashboard loaded successfully.</p>
+    <button id="open">Open</button>
+  </div>
+  <script>
+    document.getElementById("open").addEventListener("click", () => {
+      document.getElementById("dash").textContent = "Opened.";
+    });
+  </script>
+</body>
+</html>

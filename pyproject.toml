@@ -4,14 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "verify-cli"
-version = "0.1.0"
-description = "Stop claiming code works without actually testing it. End-to-end verifier for any project — runs your tests, checks services and endpoints, and exercises UI in a real headless browser."
+version = "0.2.0"
+description = "Universal end-to-end verification: give an AI agent eyes and hands on whatever your project runs on — web, Android, Linux/Windows desktop, or embedded MCUs."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Jeremiah Mackey" }]
 requires-python = ">=3.10"
 dependencies = [
+    "click>=8.1",
     "pyyaml>=6.0",
+    "pillow>=10.0",
+    "anthropic>=0.40",
 ]
 classifiers = [
     "License :: OSI Approved :: MIT License",
@@ -20,9 +23,20 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-ui   = ["playwright>=1.40"]
-test = ["pytest>=7"]
-all  = ["playwright>=1.40", "pytest>=7"]
+web     = ["playwright>=1.40"]
+android = ["adbutils>=2.0", "uiautomator2>=3.0"]
+desktop = ["mss>=9.0"]
+mcp     = ["mcp>=1.0"]
+test    = ["pytest>=7", "pytest-asyncio>=0.23"]
+all     = [
+    "playwright>=1.40",
+    "adbutils>=2.0",
+    "uiautomator2>=3.0",
+    "mss>=9.0",
+    "mcp>=1.0",
+    "pytest>=7",
+    "pytest-asyncio>=0.23",
+]
 
 [project.scripts]
 verify = "verify.cli:main"
@@ -32,3 +46,7 @@ Homepage = "https://github.com/JeremiahM37/verify"
 
 [tool.setuptools.packages.find]
 include = ["verify*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

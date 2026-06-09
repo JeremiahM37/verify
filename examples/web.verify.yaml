@@ -1,0 +1,41 @@
+# Example: a React/Next.js app with a login flow.
+#
+# Run with:  verify run examples/web.verify.yaml
+backend: web
+
+launch:
+  command: npm run dev
+  url: http://localhost:3000
+  wait_after: 3
+
+options:
+  web:
+    headless: true
+    viewport: [1280, 800]
+
+steps:
+  - name: home page loads cleanly
+    actions:
+      - navigate: http://localhost:3000
+    expect:
+      vision: "home page rendered with no error banner, stack trace, or blank-white screen"
+
+  - name: sign-in succeeds
+    actions:
+      - click: { locate: { vision: "the email input field on the sign-in form" } }
+      - type:  test@example.com
+      - key:   tab
+      - type:  hunter2
+      - click: { locate: { vision: "the log in / sign in / submit button" } }
+      - wait:  2
+    expect:
+      vision: "user is on the dashboard; no error toast, no red banner, no login form still visible"
+      url_contains: /dashboard
+
+  - name: sign-out works
+    actions:
+      - click: { locate: { vision: "the user avatar or account menu in the header" } }
+      - click: { locate: { vision: "the sign out menu item" } }
+      - wait:  1
+    expect:
+      vision: "back on a public page; no errors; dashboard contents no longer visible"

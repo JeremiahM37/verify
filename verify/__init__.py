@@ -1,2 +1,3 @@
-"""verify — end-to-end verifier for any project."""
-__version__ = "0.1.0"
+"""verify — universal end-to-end verification with vision."""
+
+__version__ = "0.2.0"

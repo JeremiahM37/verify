@@ -1,0 +1,48 @@
+# Example: an Android app where typing into a text field must actually work.
+#
+# This is the exact failure mode that motivated verify: the soft keyboard pops
+# up, the user thinks they typed, but the input field is empty because the
+# IME never committed the composition. A backend test would never see it.
+#
+# Run with an emulator already booted (or set launch.command to boot one):
+#   verify run examples/android.verify.yaml
+backend: android
+
+launch:
+  # Optional: boot an emulator. Omit if a device is already attached.
+  # command: emulator -avd Pixel_6_API_34 -no-window -no-audio
+  package: com.example.myapp
+  wait_after: 3
+
+options:
+  android:
+    # serial: emulator-5554
+    #
+    # Or boot a labeled, auto-cleaned-up emulator inside Docker:
+    # docker_image: budtmo/docker-android:emulator_14.0
+    # docker_adb_port: 5555
+    # docker_ready_log: "emulator: INFO: boot completed"
+    # docker_boot_timeout: 300
+
+steps:
+  - name: app opens to the main screen
+    expect:
+      vision: "app's main screen visible — no crash dialog, no ANR, no white error"
+
+  - name: typing into search field works end-to-end
+    actions:
+      - click: { locate: { vision: "the search input field at the top of the screen" } }
+      - wait: 0.5
+      - type: "pizza"
+      - key: enter
+      - wait: 1.5
+    expect:
+      vision: "the search query 'pizza' is visible in the field AND a result list is shown below"
+      log_contains: "Query: pizza"
+
+  - name: back button returns to main
+    actions:
+      - key: back
+      - wait: 0.5
+    expect:
+      vision: "back on the main screen, search results no longer shown"

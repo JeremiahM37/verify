@@ -1,0 +1,21 @@
+# Example: a CLI/server process where vision isn't useful, but log assertions
+# matter. The generic backend just runs the process and tails its stdout.
+#
+# Run with: verify run examples/generic.verify.yaml
+backend: generic
+
+launch:
+  command: ./run.sh
+  wait_after: 3
+
+steps:
+  - name: process starts and prints ready
+    expect:
+      log_contains: "Server ready"
+      no_log_contains: "ERROR"
+
+  - name: no panics after warm-up
+    actions:
+      - wait: 5
+    expect:
+      no_log_contains: "panic"

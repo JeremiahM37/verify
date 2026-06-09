@@ -2,151 +2,186 @@
 
 Stop claiming code works without actually testing it.
 
-`verify` is a tiny CLI that reads a `.verify.yaml` from your project root
-and runs every check declared there: unit tests, service health, endpoint
-probes, log scans, and — the killer feature — a real headless Chromium that
-clicks through your UI like a user would. Exit code 0 iff everything passes,
-so you can wire it into pre-commit, CI, or your AI coding assistant's "am I
-done?" hook.
+`verify` reads a `.verify.yaml` from your project root, picks the right backend
+for what you're building, drives the app like a user would, and uses a vision
+model to read the screen. Exit code 0 iff every step passes. Web app, Android
+app, Linux desktop app, STM32 firmware, or anything else — same CLI, same YAML.
 
 ## Why
 
-AI coding assistants (and humans!) routinely claim "deployed" / "fixed" /
-"should work now" without actually verifying. The result is the regression
-loop: ship, get a bug report, claim fix, get another bug report. `verify`
-is the cheap, project-local antidote: a single command that exercises the
-thing as a user does and reports back.
-
-It's deliberately tiny — no daemon, no service, no SaaS. One Python CLI,
-one YAML file per project, ~600 lines total.
+Backend tests pass. Logs look clean. The binary builds. The actual rendered UI
+shows a stack trace, a red error banner, or an input field that silently
+swallowed the keystrokes. `verify` catches that class of bug: it screenshots,
+sends the image + a natural-language expectation to a vision model, and reports
+pass/fail with the model's own reasoning quoted back.
 
 ## Install
 
 ```bash
-pip install verify-cli           # core (pytest / systemd / http / journalctl / shell)
-pip install verify-cli[ui]       # + playwright for UI flow checks
-playwright install chromium      # if you want the UI check to work
+pip install verify-cli                # core
+pip install "verify-cli[web]"         # + Playwright
+pip install "verify-cli[android]"     # + adbutils
+pip install "verify-cli[desktop]"     # + mss
+pip install "verify-cli[mcp]"         # + MCP server
+pip install "verify-cli[all]"         # everything
 ```
 
-Or from source:
+Vision provider (pick one):
+
 ```bash
-git clone https://github.com/JeremiahM37/verify
-cd verify && pip install -e '.[ui]'
-playwright install chromium
+export ANTHROPIC_API_KEY=sk-ant-...                       # Claude
+# or
+ollama pull gemma4:e4b                                     # local, free
+export VERIFY_OLLAMA_HOST=http://127.0.0.1:11434
 ```
 
-## Quick start
+`verify backends` lists what's installed and what each backend needs.
 
-In your project root, write `.verify.yaml`:
+## Backends
+
+| Backend | Drives | Host needs |
+|---|---|---|
+| `web` | Playwright + headless Chromium | `playwright install chromium` |
+| `android` | `adb` (real device, emulator, or docker-android image) | Android platform-tools |
+| `linux_desktop` | Xvfb + xdotool + xwd | `apt install xvfb xdotool x11-apps imagemagick` |
+| `renode` | Renode Monitor + UART + framebuffer | [renode.io](https://renode.io/#downloads) |
+| `generic` | `mss` host capture + native input | — (fallback) |
+
+## Quickstart
+
+```bash
+cd my-project
+verify init                # writes .verify.yaml for the detected backend
+verify run                 # executes it
+```
+
+A typical config:
 
 ```yaml
-checks:
-  - name: tests
-    type: pytest
+backend: web
 
-  - name: api-healthy
-    type: http
-    targets:
-      - { url: "http://127.0.0.1:8000/healthz", status: 200, contains: '"ok":true' }
+launch:
+  command: npm run dev
+  url: http://localhost:3000
+  wait_after: 2
 
-  - name: login-works
-    type: ui
-    url: "http://127.0.0.1:8000/"
-    steps:
-      - wait: 'input[name="email"]'
-      - fill: { selector: 'input[name="email"]',    text: "demo@example.test" }
-      - fill: { selector: 'input[name="password"]', text: "demo-password" }
-      - click: 'button[type="submit"]'
-      - wait: ".dashboard"
-      - expect_text: { selector: ".user-greeting", contains: "Welcome" }
-```
-
-Run:
-```
-$ verify
-────────────────────────────────────────────────────────────
-verify: 3/3 passed
-────────────────────────────────────────────────────────────
-  [✓] tests
-  [✓] api-healthy
-  [✓] login-works
-────────────────────────────────────────────────────────────
-PASS
-```
-
-## Check types
-
-| Type        | What it does | Key fields |
-|-------------|--------------|------------|
-| `pytest`    | Runs pytest, pass if exit 0 | `run`, `cwd` |
-| `shell`     | Runs an arbitrary command | `run`, `cwd`, `env`, `timeout` |
-| `systemd`   | Every listed unit must be `active` | `units` |
-| `journalctl`| No forbidden strings in recent unit logs | `units`, `since`, `forbid`, `ignore` |
-| `http`      | One or more endpoints with status + body assertions | `targets` |
-| `ui`        | Drives headless Chromium through inline steps | `url`, `steps`, `viewport`, `step_timeout` |
-| `playwright`| Runs an existing Playwright Python script | `script`, `python` |
-
-See [`examples/`](examples/) for full configs covering a FastAPI service and
-a generic web app.
-
-## The `ui` step vocabulary
-
-Each step is either a bare string (= "wait for this selector") or a
-single-key dict. Available actions:
-
-```yaml
 steps:
-  - wait: "#new-item"
-  - click: "#new-item"
-  - fill: { selector: 'input[name="title"]', text: "hello" }
-  - type: { selector: '#chatbox',          text: "slow typing" }
-  - press: "Enter"
-  - sleep: 0.5
-  - expect_text:    { selector: ".item:first-child", contains: "hello" }
-  - expect_count:   { selector: ".item", n: 1 }
-  - expect_visible: ".dashboard"
-  - expect_status:  { url: "http://localhost:8000/api/items", code: 200 }
-  - eval: "() => sessions.length === 3"
-  - screenshot: "/tmp/state.png"
-  - goto: "/another-page"
+  - name: home loads cleanly
+    actions:
+      - navigate: http://localhost:3000
+    expect:
+      vision: "home page rendered; no error banner, stack trace, or 404"
+
+  - name: sign in works
+    actions:
+      - click: { locate: { vision: "the email input field" } }
+      - type:  test@example.com
+      - key:   tab
+      - type:  hunter2
+      - click: { locate: { vision: "the log in button" } }
+      - wait:  2
+    expect:
+      vision: "user is on the dashboard; no error toast or modal visible"
+      url_contains: /dashboard
 ```
 
-Any uncaught JS error fires during the run fails the step (set
-`allow_js_errors: true` to disable).
+## Action vocabulary
 
-## CLI flags
+Same across every backend.
 
+| Action | Args |
+|---|---|
+| `navigate` | `target: <url>` |
+| `click` (alias `tap`) | `at: [x, y]` OR `selector: <css>` OR `locate: { vision: "..." }` |
+| `type` (alias `type_text`) | `text: "..."` |
+| `key` | `name: enter / tab / back / ...` |
+| `wait` | `seconds: 1.5` |
+| `shell` | `cmd: "..."` (escape hatch; runs on host) |
+
+Shorthand: any single-arg action can be written `{verb: value}` —
+`{wait: 1}`, `{type: "hello"}`, `{key: enter}`.
+
+Step expectations:
+
+```yaml
+expect:
+  vision: "natural-language description of what should be visible"
+  url_contains: "/dashboard"      # web / android
+  log_contains: "Server ready"    # any backend
+  no_log_contains: "FATAL"        # any backend
 ```
-verify [config]                  # path to .verify.yaml (default: ./.verify.yaml)
-verify --only pytest,http        # run only these check types
-verify --skip ui                 # skip these types
-verify --json                    # machine-readable output
+
+## Docker sandboxes
+
+Backends that need an isolated target environment (Android emulator, sandboxed
+Linux desktop) can run it inside Docker. Every container is labeled
+`verify.session=<uuid>` and torn down on backend stop, normal exit, and SIGINT.
+
+```yaml
+backend: android
+launch:
+  package: com.example.app
+  wait_after: 3
+options:
+  android:
+    docker_image: budtmo/docker-android:emulator_14.0
+    docker_adb_port: 5555
 ```
 
-Exit code is `0` if all checks pass, `1` otherwise. Anything wired to
-`verify` as a pre-condition (CI, pre-commit, AI assistant hook) gets clean
-go/no-go semantics.
-
-## Wiring it into a Claude Code workflow
-
-Drop the included skill into `~/.claude/skills/verify.md` (copy from
-`claude-code-skill/verify.md` in this repo) and add a line to your
-project's `CLAUDE.md`:
-
-> Before claiming "done", run `verify` from the affected project's
-> directory and quote the PASS/FAIL line. If it fails, fix the issue and
-> re-run — don't declare done while red.
-
-Claude Code will read both, run `verify` after changes, and not claim
-completion until the suite is green.
-
-## Tests
+Containers left over from a hard crash:
 
 ```bash
-pip install -e '.[test]'
+verify sandboxes list                       # show every verify container
+verify sandboxes prune                      # remove orphans > 30min old
+verify sandboxes prune --all                # remove every verify container
+verify sandboxes prune --older-than 600
+```
+
+## MCP server
+
+`verify mcp` starts an MCP stdio server pinned to one backend session, exposing
+`screenshot`, `click`, `type_text`, `key`, `wait`, `read_logs`, `navigate`,
+`locate`, and `screen_size` to Claude Code or any MCP client. Useful for
+exploratory testing where the agent picks the next action itself.
+
+```json
+{
+  "mcpServers": {
+    "verify": {
+      "command": "verify",
+      "args": ["mcp", "--config", "./.verify.yaml"]
+    }
+  }
+}
+```
+
+## Adding a backend
+
+Subclass `verify.backends.base.Backend`, implement six primitives
+(`screenshot`, `click`, `type_text`, `key`, `read_logs`, plus `start`/`stop`),
+decorate with `@register`. The runner and MCP server pick it up. See
+`verify/backends/web.py` for the simplest example.
+
+## Examples
+
+- `examples/web.verify.yaml` — React app + login flow
+- `examples/android.verify.yaml` — Android keyboard / search
+- `examples/stm32.verify.yaml` — blink firmware via Renode
+- `examples/linux_desktop.verify.yaml` — Qt app window
+- `examples/generic.verify.yaml` — any process + host screen
+
+## Test suite
+
+```bash
+pip install "verify-cli[all]"
+playwright install chromium
 pytest -q
 ```
 
+The e2e suite drives a real Chromium against a sample app with an intentional
+UI bug; vision catches the visible error banner that a backend-only test
+would miss.
+
 ## License
 
-[MIT](LICENSE)
+MIT.
