@@ -131,7 +131,8 @@ class RenodeBackend(Backend):
         )
 
         def drain():
-            assert self._proc is not None and self._proc.stdout is not None
+            if self._proc is None or self._proc.stdout is None:
+                return
             for line in iter(self._proc.stdout.readline, b""):
                 self._uart_logs.append(line.decode("utf-8", errors="replace").rstrip())
 

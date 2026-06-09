@@ -95,3 +95,73 @@ def test_capabilities(web):
 def test_detection_react_project(tmp_path):
     (tmp_path / "package.json").write_text('{"dependencies": {"react": "^18"}}')
     assert WebBackend.detect(tmp_path).confidence == 80
+
+
+def test_detection_zero_on_empty_dir(tmp_path):
+    assert WebBackend.detect(tmp_path).confidence == 0
+
+
+def test_dev_server_command_is_spawned(monkeypatch, web):
+    """When launch.command is set, _start_dev_server should fire a subprocess."""
+    spawned = []
+
+    class FakeProc:
+        stdout = None
+
+        def terminate(self):
+            spawned.append("terminate")
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(cmd, **kw):
+        spawned.append(("popen", cmd))
+        return FakeProc()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    # Call _start_dev_server directly to isolate the path.
+    web._start_dev_server(LaunchSpec(command="echo hello", env={"X": "1"}))
+    assert spawned and spawned[0][0] == "popen"
+    # Shell-style strings get split.
+    assert spawned[0][1] == ["echo", "hello"]
+
+
+def test_dev_server_command_with_args_list(monkeypatch, web):
+    spawned = []
+
+    class FakeProc:
+        stdout = None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(
+        "subprocess.Popen", lambda cmd, **kw: (spawned.append(cmd), FakeProc())[1]
+    )
+    web._start_dev_server(LaunchSpec(command="serve", args=["-p", "3000"]))
+    assert spawned[0] == ["serve", "-p", "3000"]
+
+
+def test_current_url_reads_page(web):
+    web.navigate("data:text/html,<title>here</title>")
+    assert "here" in web.current_url() or "data:" in web.current_url()
+
+
+def test_stop_is_idempotent(web):
+    """Calling stop twice doesn't raise."""
+    web.stop()
+    web.stop()  # second time should be a no-op
+
+
+def test_console_log_captured_in_read_logs(web):
+    """A page that console.logs leaves the message in the buffer."""
+    web.navigate("data:text/html,<script>console.log('VERIFY-PROBE-XYZ')</script>")
+    # Give the event loop a moment to flush the console event.
+    import time
+
+    time.sleep(0.3)
+    logs = web.read_logs(lines=20)
+    assert "VERIFY-PROBE-XYZ" in logs

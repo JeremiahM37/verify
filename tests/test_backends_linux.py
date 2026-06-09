@@ -109,3 +109,86 @@ def test_start_requires_command():
     with pytest.raises(ValueError, match="launch.command"):
         # Bypass Xvfb to isolate the validation path.
         b._start_app(LaunchSpec())
+
+
+# ---- full lifecycle (Xvfb + app), all subprocesses mocked ----------------
+
+
+class _FakeProc:
+    def __init__(self, name):
+        self.name = name
+        self.stdout = None
+        self.terminated = False
+        self.killed = False
+
+    def terminate(self):
+        self.terminated = True
+
+    def wait(self, timeout=None):
+        return 0
+
+    def kill(self):
+        self.killed = True
+
+
+@pytest.fixture
+def linux_lifecycle(monkeypatch):
+    """Mock Popen and subprocess.run so we can exercise start/stop end-to-end."""
+    procs: list[_FakeProc] = []
+
+    def fake_popen(cmd, **kwargs):
+        name = "xvfb" if "Xvfb" in cmd[0] else "app"
+        p = _FakeProc(name)
+        procs.append(p)
+        return p
+
+    def fake_run(args, **kw):
+        return types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+    # Skip the Xvfb-socket wait by faking the marker path.
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    # Pretend Xvfb's UNIX socket appears instantly.
+    import pathlib
+
+    real_exists = pathlib.Path.exists
+
+    def maybe_exists(self):
+        if "/tmp/.X11-unix/X" in str(self):
+            return True
+        return real_exists(self)
+
+    monkeypatch.setattr(pathlib.Path, "exists", maybe_exists)
+    return procs
+
+
+def test_full_start_and_stop(linux_lifecycle):
+    from verify.backends.base import LaunchSpec
+    from verify.backends.linux_desktop import LinuxDesktopBackend
+
+    b = LinuxDesktopBackend(display=":42", screen_size=(640, 480))
+    b.start(LaunchSpec(command="./myapp", wait_after=0))
+    # Both Xvfb and app proc started.
+    assert len(linux_lifecycle) == 2
+    names = {p.name for p in linux_lifecycle}
+    assert names == {"xvfb", "app"}
+    b.stop()
+    for p in linux_lifecycle:
+        assert p.terminated or p.killed
+
+
+def test_stop_with_no_procs_is_safe():
+    """stop() before start() must not crash."""
+    from verify.backends.linux_desktop import LinuxDesktopBackend
+
+    b = LinuxDesktopBackend()
+    b.stop()  # no exception
+
+
+def test_capabilities_reports_no_dom():
+    from verify.backends.linux_desktop import LinuxDesktopBackend
+
+    caps = LinuxDesktopBackend().capabilities()
+    assert caps.can_navigate is False
+    assert caps.can_query_dom is False

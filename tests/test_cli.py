@@ -101,6 +101,124 @@ def test_run_with_fake_backend_through_runner(tmp_path, monkeypatch):
     assert "PASS" in r.output
 
 
+def test_detect_no_match_exits_2(tmp_path, monkeypatch):
+    """When no backend has confidence > 0 AND is available, print 'none' + exit 2."""
+    # Patch the registry so even generic isn't returned.
+    from verify.backends.registry import DetectionMatch
+    from verify.backends.base import DetectionResult
+
+    class _Unavail:
+        name = "phantom"
+
+        @classmethod
+        def is_available(cls):
+            return False, "missing"
+
+    monkeypatch.setattr(
+        "verify.cli.detect_all",
+        lambda d: [DetectionMatch("phantom", _Unavail, DetectionResult(50, "matched"))],
+    )
+    r = CliRunner().invoke(main, ["detect", "--cwd", str(tmp_path)])
+    assert r.exit_code == 2
+    assert r.output.strip() == "none"
+
+
+def test_run_prints_setup_error(tmp_path, monkeypatch):
+    """Runner failures should be printed to stdout and exit non-zero."""
+    p = tmp_path / ".verify.yaml"
+    p.write_text("backend: nonexistent\nsteps: []\n")
+    # Don't monkeypatch — let the real runner produce setup_error via the
+    # backend-selection failure path we fixed earlier.
+    r = CliRunner().invoke(main, ["run", str(p)])
+    assert r.exit_code != 0
+    assert "setup error" in r.output or "FAIL" in r.output
+
+
+def test_init_prints_what_was_written(tmp_path):
+    r = CliRunner().invoke(main, ["init", "--cwd", str(tmp_path)])
+    assert r.exit_code == 0
+    assert "wrote" in r.output and ".verify.yaml" in r.output
+
+
+def test_mcp_subcommand_invokes_serve(tmp_path, monkeypatch):
+    p = tmp_path / ".verify.yaml"
+    p.write_text("backend: web\nsteps: []\n")
+    captured: dict = {}
+
+    def fake_serve(*, config_path):
+        captured["config_path"] = config_path
+
+    monkeypatch.setattr("verify.mcp_server.serve", fake_serve)
+    r = CliRunner().invoke(main, ["mcp", "--config", str(p)])
+    assert r.exit_code == 0
+    assert captured["config_path"] == p
+
+
+def test_no_args_runs_default_yaml(tmp_path, monkeypatch):
+    """`verify` with no subcommand should run .verify.yaml in cwd."""
+    # Click's CliRunner doesn't easily switch cwd. Verify via the error case
+    # (no .verify.yaml in working dir).
+    monkeypatch.chdir(tmp_path)
+    r = CliRunner().invoke(main, [])
+    assert r.exit_code != 0
+    assert "no such file" in r.output
+
+
+def test_full_passing_run_through_cli_with_yaml_and_fake_backend(tmp_path, monkeypatch):
+    """End-to-end CLI invocation with a tiny YAML and a stub backend in the
+    registry. Proves the whole CLI -> config -> runner -> exit path."""
+    from verify.backends.base import Backend, DetectionResult, LaunchSpec
+    from verify.backends.registry import _REGISTRY
+
+    class _NoopBackend(Backend):
+        name = "noop-cli-test"
+
+        @classmethod
+        def detect(cls, project_dir):
+            return DetectionResult(0, "")
+
+        def start(self, spec):
+            pass
+
+        def stop(self):
+            pass
+
+        def screen_size(self):
+            return (10, 10)
+
+        def screenshot(self):
+            return b"\x89PNG\r\n\x1a\nDATA"
+
+        def click(self, x, y, button="left"):
+            pass
+
+        def type_text(self, text):
+            pass
+
+        def key(self, name):
+            pass
+
+        def read_logs(self, lines=100):
+            return "Server ready\n"
+
+    _REGISTRY["noop-cli-test"] = _NoopBackend
+    try:
+        p = tmp_path / ".verify.yaml"
+        p.write_text(
+            "backend: noop-cli-test\n"
+            "steps:\n"
+            "  - name: smoke\n"
+            "    expect:\n"
+            "      log_contains: 'Server ready'\n"
+        )
+        r = CliRunner().invoke(main, ["run", str(p)])
+        assert r.exit_code == 0
+        assert "PASS" in r.output
+        assert "smoke" in r.output
+    finally:
+        _REGISTRY.pop("noop-cli-test", None)
+
+
 def test_sandboxes_list_no_docker(monkeypatch):
     monkeypatch.setattr("verify.sandbox.docker_available", lambda: (False, "not on PATH"))
     r = CliRunner().invoke(main, ["sandboxes", "list"])

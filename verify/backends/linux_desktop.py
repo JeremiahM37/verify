@@ -142,7 +142,8 @@ class LinuxDesktopBackend(Backend):
         import threading
 
         def drain():
-            assert self._app is not None and self._app.stdout is not None
+            if self._app is None or self._app.stdout is None:
+                return
             for line in iter(self._app.stdout.readline, b""):
                 try:
                     self._logs.append(line.decode("utf-8", errors="replace").rstrip())

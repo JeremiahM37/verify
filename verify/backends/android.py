@@ -174,7 +174,8 @@ class AndroidBackend(Backend):
         )
 
         def drain():
-            assert self._logcat is not None and self._logcat.stdout is not None
+            if self._logcat is None or self._logcat.stdout is None:
+                return
             for line in iter(self._logcat.stdout.readline, b""):
                 self._logs.append(line.decode("utf-8", errors="replace").rstrip())
 

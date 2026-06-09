@@ -111,7 +111,14 @@ def run(
     `backend` and `vision` are optional injection points for testing.
     """
 
-    backend_name, backend_obj = _select_backend(config, project_dir, backend)
+    try:
+        backend_name, backend_obj = _select_backend(config, project_dir, backend)
+    except Exception as e:
+        # Surface as setup_error rather than propagating — the CLI prints the
+        # report and exits 1, which is the same outcome but with a structured
+        # message ("backend foo unavailable: needs xdotool") rather than a
+        # traceback.
+        return RunReport(backend=config.backend, setup_error=f"backend selection failed: {e}")
     report = RunReport(backend=backend_name)
 
     # Lazy: vision client only needed if some step uses it.

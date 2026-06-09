@@ -115,6 +115,57 @@ def test_screen_size_via_mss(monkeypatch):
     assert b.screen_size() == (1920, 1080)
 
 
+def test_start_spawns_subprocess_when_command_given(monkeypatch):
+    """generic.start() launches the command and registers a log drain."""
+    from verify.backends.base import LaunchSpec
+    from verify.backends.generic import GenericBackend
+
+    spawned = []
+
+    class FakeProc:
+        stdout = None
+
+        def terminate(self):
+            spawned.append("terminate")
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(cmd, **kw):
+        spawned.append(("popen", cmd))
+        return FakeProc()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    b = GenericBackend()
+    b.start(LaunchSpec(command="./run.sh", env={"X": "1"}))
+    assert spawned[0][0] == "popen"
+    assert spawned[0][1] == ["./run.sh"]
+    b.stop()
+    assert "terminate" in spawned
+
+
+def test_start_without_command_does_not_spawn(monkeypatch):
+    """If launch.command is None, no process is started (attach mode)."""
+    from verify.backends.base import LaunchSpec
+    from verify.backends.generic import GenericBackend
+
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("should not spawn")),
+    )
+    b = GenericBackend()
+    b.start(LaunchSpec(command=None))
+    b.stop()
+
+
+def test_read_logs_returns_string():
+    from verify.backends.generic import GenericBackend
+
+    b = GenericBackend()
+    b._logs.extend(["a", "b", "c"])
+    assert b.read_logs() == "a\nb\nc"
+
+
 def test_unsupported_os_routes_to_powershell(monkeypatch):
     calls: list[list] = []
 
