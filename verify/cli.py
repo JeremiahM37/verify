@@ -15,6 +15,7 @@ Subcommands:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -115,7 +116,13 @@ def init_cmd(cwd: Path, backend_override: str | None, force: bool) -> None:
 @click.option(
     "--json", "as_json", is_flag=True, help="Emit a JSON report instead of text."
 )
-def run(config_path: Path, as_json: bool) -> None:
+@click.option(
+    "--artifacts-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Where to write failure screenshots (default: .verify-artifacts next to the config).",
+)
+def run(config_path: Path, as_json: bool, artifacts_dir: Path | None) -> None:
     """Run a .verify.yaml against its target."""
     if not config_path.is_file():
         click.echo(f"no such file: {config_path}", err=True)
@@ -126,10 +133,14 @@ def run(config_path: Path, as_json: bool) -> None:
     project_dir = config_path.resolve().parent
     report = run_verify(cfg, project_dir)
 
+    if artifacts_dir is None:
+        artifacts_dir = project_dir / ".verify-artifacts"
+    screenshots = _persist_failure_screenshots(report, artifacts_dir)
+
     if as_json:
-        click.echo(_report_to_json(report))
+        click.echo(_report_to_json(report, screenshots))
     else:
-        _print_report(report)
+        _print_report(report, screenshots)
     sys.exit(0 if report.passed else 1)
 
 
@@ -298,9 +309,30 @@ steps:
     return templates.get(backend, templates["generic"])
 
 
-def _print_report(report) -> None:
+def _persist_failure_screenshots(
+    report, artifacts_dir: Path
+) -> dict[int, Path]:
+    """Write each failed step's screenshot PNG to `artifacts_dir`.
+
+    Returns {step index -> written path}. The directory is only created when
+    there is at least one failure screenshot to write.
+    """
+    out: dict[int, Path] = {}
+    for i, s in enumerate(report.steps):
+        if s.passed or not s.screenshot_png:
+            continue
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", s.step.name).strip("-") or "step"
+        path = artifacts_dir / f"step-{i + 1:02d}-{slug}.png"
+        path.write_bytes(s.screenshot_png)
+        out[i] = path
+    return out
+
+
+def _print_report(report, screenshots: dict[int, Path] | None = None) -> None:
+    screenshots = screenshots or {}
     click.echo(report.summary())
-    for s in report.steps:
+    for i, s in enumerate(report.steps):
         marker = "PASS" if s.passed else "FAIL"
         click.echo(f"  [{marker}] {s.step.name}")
         for ar in s.actions:
@@ -318,11 +350,14 @@ def _print_report(report) -> None:
                 click.echo("      log mismatch")
         if s.error:
             click.echo(f"      error: {s.error}")
+        if i in screenshots:
+            click.echo(f"      screenshot: {screenshots[i]}")
     if report.setup_error:
         click.echo(f"setup error: {report.setup_error}")
 
 
-def _report_to_json(report) -> str:
+def _report_to_json(report, screenshots: dict[int, Path] | None = None) -> str:
+    screenshots = screenshots or {}
     return json.dumps(
         {
             "passed": report.passed,
@@ -333,6 +368,7 @@ def _report_to_json(report) -> str:
                     "name": s.step.name,
                     "passed": s.passed,
                     "error": s.error,
+                    "screenshot": str(screenshots[i]) if i in screenshots else None,
                     "actions": [
                         {"type": ar.action.type, "ok": ar.ok, "error": ar.error}
                         for ar in s.actions
@@ -355,7 +391,7 @@ def _report_to_json(report) -> str:
                         else None
                     ),
                 }
-                for s in report.steps
+                for i, s in enumerate(report.steps)
             ],
         },
         indent=2,

@@ -10,7 +10,10 @@ The runner is intentionally narrow:
 
 Failures are recorded with the screenshot at the point of failure, the vision
 rationale, and the last 200 lines of logs — so when verify reports "the
-keyboard input never reached the field", you can actually see why.
+keyboard input never reached the field", you can actually see why. The CLI
+persists each failed step's screenshot as a PNG under `.verify-artifacts/`
+(next to the config; override with `--artifacts-dir`) and references the path
+in both the text and JSON reports.
 """
 
 from __future__ import annotations

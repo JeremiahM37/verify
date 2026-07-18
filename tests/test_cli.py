@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 
 from click.testing import CliRunner
 
@@ -214,6 +215,116 @@ def test_full_passing_run_through_cli_with_yaml_and_fake_backend(tmp_path, monke
         assert "smoke" in r.output
     finally:
         _REGISTRY.pop("noop-cli-test", None)
+
+
+def _register_stub_backend(name, *, logs="Server ready\n"):
+    """Register a minimal real Backend subclass under `name`. Caller must pop it."""
+    from verify.backends.base import Backend, DetectionResult
+    from verify.backends.registry import _REGISTRY
+
+    class _StubBackend(Backend):
+        @classmethod
+        def detect(cls, project_dir):
+            return DetectionResult(0, "")
+
+        def start(self, spec):
+            pass
+
+        def stop(self):
+            pass
+
+        def screen_size(self):
+            return (10, 10)
+
+        def screenshot(self):
+            return b"\x89PNG\r\n\x1a\nDATA"
+
+        def click(self, x, y, button="left"):
+            pass
+
+        def type_text(self, text):
+            pass
+
+        def key(self, name):
+            pass
+
+        def read_logs(self, lines=100):
+            return logs
+
+    _StubBackend.name = name
+    _REGISTRY[name] = _StubBackend
+    return _StubBackend
+
+
+def test_failed_step_screenshot_written_to_artifacts_dir(tmp_path):
+    """On step failure the CLI persists the PNG and prints its path."""
+    from verify.backends.registry import _REGISTRY
+
+    _register_stub_backend("shot-cli-test", logs="nothing useful\n")
+    try:
+        p = tmp_path / ".verify.yaml"
+        p.write_text(
+            "backend: shot-cli-test\n"
+            "steps:\n"
+            "  - name: boom step\n"
+            "    expect:\n"
+            "      log_contains: 'Server ready'\n"
+        )
+        r = CliRunner().invoke(main, ["run", str(p)])
+        assert r.exit_code == 1
+        shot = tmp_path / ".verify-artifacts" / "step-01-boom-step.png"
+        assert shot.is_file()
+        assert shot.read_bytes() == b"\x89PNG\r\n\x1a\nDATA"
+        assert str(shot) in r.output
+    finally:
+        _REGISTRY.pop("shot-cli-test", None)
+
+
+def test_passing_run_writes_no_artifacts(tmp_path):
+    from verify.backends.registry import _REGISTRY
+
+    _register_stub_backend("noshot-cli-test")
+    try:
+        p = tmp_path / ".verify.yaml"
+        p.write_text(
+            "backend: noshot-cli-test\n"
+            "steps:\n"
+            "  - name: ok\n"
+            "    expect:\n"
+            "      log_contains: 'Server ready'\n"
+        )
+        r = CliRunner().invoke(main, ["run", str(p)])
+        assert r.exit_code == 0
+        assert not (tmp_path / ".verify-artifacts").exists()
+    finally:
+        _REGISTRY.pop("noshot-cli-test", None)
+
+
+def test_failure_screenshot_path_in_json_report(tmp_path):
+    from verify.backends.registry import _REGISTRY
+
+    _register_stub_backend("shot-json-test", logs="nope\n")
+    try:
+        p = tmp_path / ".verify.yaml"
+        art = tmp_path / "custom-artifacts"
+        p.write_text(
+            "backend: shot-json-test\n"
+            "steps:\n"
+            "  - name: fails\n"
+            "    expect:\n"
+            "      log_contains: 'Server ready'\n"
+        )
+        r = CliRunner().invoke(
+            main, ["run", str(p), "--json", "--artifacts-dir", str(art)]
+        )
+        assert r.exit_code == 1
+        data = json.loads(r.output)
+        shot = data["steps"][0]["screenshot"]
+        assert shot is not None
+        assert shot.startswith(str(art))
+        assert (art / "step-01-fails.png").is_file()
+    finally:
+        _REGISTRY.pop("shot-json-test", None)
 
 
 def test_sandboxes_list_no_docker(monkeypatch):
