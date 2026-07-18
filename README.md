@@ -18,12 +18,12 @@ pass/fail with the model's own reasoning quoted back.
 ## Install
 
 ```bash
-pip install verify-cli                # core
-pip install "verify-cli[web]"         # + Playwright
-pip install "verify-cli[android]"     # + adbutils
-pip install "verify-cli[desktop]"     # + mss
-pip install "verify-cli[mcp]"         # + MCP server
-pip install "verify-cli[all]"         # everything
+pip install git+https://github.com/JeremiahM37/verify                          # core
+pip install "verify-cli[web] @ git+https://github.com/JeremiahM37/verify"      # + Playwright
+pip install "verify-cli[android] @ git+https://github.com/JeremiahM37/verify"  # + adbutils
+pip install "verify-cli[desktop] @ git+https://github.com/JeremiahM37/verify"  # + mss
+pip install "verify-cli[mcp] @ git+https://github.com/JeremiahM37/verify"      # + MCP server
+pip install "verify-cli[all] @ git+https://github.com/JeremiahM37/verify"      # everything
 ```
 
 Vision provider (pick one):
@@ -173,7 +173,7 @@ decorate with `@register`. The runner and MCP server pick it up. See
 ## Test suite
 
 ```bash
-pip install "verify-cli[all]"
+pip install "verify-cli[all] @ git+https://github.com/JeremiahM37/verify"
 playwright install chromium
 pytest -q
 ```
