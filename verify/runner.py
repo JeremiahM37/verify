@@ -10,13 +10,18 @@ The runner is intentionally narrow:
 
 Failures are recorded with the screenshot at the point of failure, the vision
 rationale, and the last 200 lines of logs — so when verify reports "the
-keyboard input never reached the field", you can actually see why.
+keyboard input never reached the field", you can actually see why. The CLI
+persists each failed step's screenshot as a PNG under `.verify-artifacts/`
+(next to the config; override with `--artifacts-dir`) and references the path
+in both the text and JSON reports.
 """
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from verify.backends.base import Backend, LaunchSpec
 from verify.backends.registry import detect_all, get
@@ -119,6 +124,13 @@ def run(
         return RunReport(backend=config.backend, setup_error=f"backend selection failed: {e}")
     report = RunReport(backend=backend_name)
 
+    # Fail fast if the config asks for verbs this backend cannot perform,
+    # before launching anything.
+    cap_errors = _capability_errors(backend_name, backend_obj.capabilities(), config.steps)
+    if cap_errors:
+        report.setup_error = "; ".join(cap_errors)
+        return report
+
     # Lazy: vision client only needed if some step uses it.
     needs_vision = any(
         _step_needs_vision(s) for s in config.steps
@@ -132,6 +144,8 @@ def run(
 
     try:
         backend_obj.start(_to_launch_spec(config))
+        if config.launch.ready_when:
+            _wait_until_ready(backend_obj, config.launch.ready_when)
     except Exception as e:
         report.setup_error = f"backend start failed: {e}"
         # Ensure partial resources (e.g. a started Playwright instance) are
@@ -153,6 +167,63 @@ def run(
             pass
 
     return report
+
+
+def _capability_errors(name, caps, steps: list[Step]) -> list[str]:
+    """Check every step's actions and expects against the backend's declared
+    capabilities. Returns human-readable errors ("backend renode does not
+    support navigate"); empty list means the config is runnable."""
+    errors: list[str] = []
+    for step in steps:
+        def bad(msg: str, _step=step) -> None:
+            errors.append(f"step {_step.name!r}: backend {name} {msg}")
+
+        for a in step.actions:
+            if a.type == "navigate" and not caps.can_navigate:
+                bad("does not support navigate")
+            elif a.type in ("click", "type", "key") and not caps.has_input:
+                bad(f"does not support {a.type} (no input)")
+            elif a.type == "click" and "selector" in a.args and not caps.can_query_dom:
+                bad("does not support selector click (no DOM)")
+            elif a.type == "screenshot" and not caps.has_screenshot:
+                bad("does not support screenshot")
+            loc = a.args.get("locate")
+            if (
+                a.type == "click"
+                and isinstance(loc, dict)
+                and loc.get("vision")
+                and not caps.has_screenshot
+            ):
+                bad("cannot use a vision locator (no screenshot)")
+        if step.expect is not None:
+            if step.expect.vision and not caps.has_screenshot:
+                bad("cannot evaluate expect.vision (no screenshot)")
+            if (
+                step.expect.log_contains is not None
+                or step.expect.no_log_contains is not None
+            ) and not caps.has_logs:
+                bad("cannot evaluate log expectations (no logs)")
+    return errors
+
+
+def _wait_until_ready(backend: Backend, ready_when: dict[str, Any]) -> None:
+    """Block until `launch.ready_when` is satisfied.
+
+    Polls the backend's logs until `log_contains` appears; raises TimeoutError
+    after `timeout` seconds (default 60). The needle is checked at least once
+    even with a zero timeout.
+    """
+    needle = ready_when["log_contains"]
+    timeout = float(ready_when.get("timeout", 60.0))
+    deadline = time.monotonic() + timeout
+    while True:
+        if needle in backend.read_logs(lines=1000):
+            return
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"ready_when: {needle!r} did not appear in logs within {timeout:g}s"
+            )
+        time.sleep(0.25)
 
 
 def _step_needs_vision(s: Step) -> bool:
@@ -253,9 +324,12 @@ def _run_action(
             cmd = action.args.get("cmd")
             if not cmd:
                 raise ValueError("shell requires cmd")
+            # Default timeout keeps a hung command from stalling the whole
+            # run forever; per-step override via `timeout:` in the YAML.
+            timeout = float(action.args.get("timeout", 120.0))
             import subprocess
 
-            subprocess.run(cmd, shell=True, check=True)
+            subprocess.run(cmd, shell=True, check=True, timeout=timeout)
         else:
             raise ValueError(f"runner has no handler for action {action.type!r}")
         return ActionResult(action=action, ok=True)

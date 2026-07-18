@@ -284,6 +284,51 @@ def test_shell_action_failure_marks_step_failed(fake_backend, tmp_project):
     assert "returned non-zero" in err or "CalledProcessError" in err
 
 
+def test_shell_action_timeout_override_kills_hung_command(fake_backend, tmp_project):
+    """`timeout:` in the YAML bounds the shell command's runtime."""
+    import time as _time
+
+    cfg = parse(
+        {
+            "backend": "fake",
+            "steps": [
+                {
+                    "name": "hang",
+                    "actions": [{"shell": {"cmd": "sleep 30", "timeout": 0.2}}],
+                }
+            ],
+        }
+    )
+    t0 = _time.monotonic()
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert _time.monotonic() - t0 < 5
+    assert not report.passed
+    assert "TimeoutExpired" in report.steps[0].actions[0].error
+
+
+def test_shell_action_default_timeout_is_120s(fake_backend, tmp_project, monkeypatch):
+    """Without an explicit timeout, the runner passes 120s to subprocess."""
+    import subprocess
+
+    captured = {}
+    real_run = subprocess.run
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    cfg = parse(
+        {
+            "backend": "fake",
+            "steps": [{"name": "x", "actions": [{"shell": {"cmd": "true"}}]}],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert report.passed
+    assert captured["timeout"] == 120.0
+
+
 def test_shell_action_without_cmd_raises(fake_backend, tmp_project):
     cfg = parse(
         {
@@ -550,6 +595,142 @@ def test_screenshot_failure_does_not_crash_step(fake_backend, tmp_project):
     assert report.steps[0].screenshot_png is None
     # log_contains succeeded -> step passes despite screenshot failure
     assert report.steps[0].passed
+
+
+def test_capability_check_rejects_navigate_on_non_web_backend(fake_backend, tmp_project):
+    """Runner validates steps against BackendCapabilities before starting."""
+    from verify.backends.base import BackendCapabilities
+
+    fake_backend.capabilities = lambda: BackendCapabilities(can_navigate=False)
+    cfg = parse(
+        {
+            "backend": "fake",
+            "steps": [{"name": "nav", "actions": [{"navigate": "http://x"}]}],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert not report.passed
+    assert "does not support navigate" in report.setup_error
+    assert report.steps == []
+    # Failed before start: the backend was never launched.
+    assert fake_backend.started_with is None
+
+
+def test_capability_check_rejects_selector_click_without_dom(fake_backend, tmp_project):
+    from verify.backends.base import BackendCapabilities
+
+    fake_backend.capabilities = lambda: BackendCapabilities(can_query_dom=False)
+    cfg = parse(
+        {
+            "backend": "fake",
+            "steps": [{"name": "s", "actions": [{"click": {"selector": "#x"}}]}],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert "selector click" in report.setup_error
+
+
+def test_capability_check_rejects_vision_without_screenshot(fake_backend, tmp_project):
+    from verify.backends.base import BackendCapabilities
+
+    fake_backend.capabilities = lambda: BackendCapabilities(has_screenshot=False)
+    cfg = parse(
+        {
+            "backend": "fake",
+            "steps": [
+                {
+                    "name": "look",
+                    "actions": [{"click": {"locate": {"vision": "a button"}}}],
+                    "expect": {"vision": "something visible"},
+                }
+            ],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert "vision locator" in report.setup_error
+    assert "expect.vision" in report.setup_error
+
+
+def test_capability_check_rejects_input_and_logs(fake_backend, tmp_project):
+    from verify.backends.base import BackendCapabilities
+
+    fake_backend.capabilities = lambda: BackendCapabilities(
+        has_input=False, has_logs=False
+    )
+    cfg = parse(
+        {
+            "backend": "fake",
+            "steps": [
+                {
+                    "name": "s",
+                    "actions": [{"type": "hi"}],
+                    "expect": {"log_contains": "hi"},
+                }
+            ],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert "does not support type" in report.setup_error
+    assert "log expectations" in report.setup_error
+
+
+def test_capable_backend_passes_capability_check(fake_backend, tmp_project):
+    """The default FakeBackend capabilities allow the full verb set."""
+    cfg = parse(
+        {
+            "backend": "fake",
+            "steps": [
+                {
+                    "name": "s",
+                    "actions": [
+                        {"navigate": "http://x"},
+                        {"click": {"at": [1, 1]}},
+                        {"type": "hi"},
+                        {"key": "enter"},
+                        {"screenshot": {}},
+                    ],
+                    "expect": {"log_contains": ""},
+                }
+            ],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert report.setup_error == ""
+    assert report.passed
+
+
+def test_ready_when_log_line_present_proceeds(fake_backend, tmp_project):
+    """launch.ready_when gates the steps on a log line, then runs normally."""
+    fake_backend.logs = "starting...\nBoot completed\n"
+    cfg = parse(
+        {
+            "backend": "fake",
+            "launch": {"ready_when": {"log_contains": "Boot completed"}},
+            "steps": [{"name": "x", "expect": {"log_contains": "Boot completed"}}],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert report.passed
+    # Readiness was checked via the logs before the first step ran.
+    assert fake_backend.events[0][0] == "read_logs"
+
+
+def test_ready_when_timeout_becomes_setup_error(fake_backend, tmp_project):
+    fake_backend.logs = "nothing relevant"
+    cfg = parse(
+        {
+            "backend": "fake",
+            "launch": {
+                "ready_when": {"log_contains": "Boot completed", "timeout": 0}
+            },
+            "steps": [{"name": "never runs"}],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert not report.passed
+    assert "did not appear" in report.setup_error
+    assert report.steps == []  # no step executed
+    assert fake_backend.stopped  # backend still cleaned up
 
 
 def test_report_summary_string(fake_backend, tmp_project):

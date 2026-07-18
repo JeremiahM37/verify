@@ -37,7 +37,7 @@ class Action:
       key         name: "enter"
       wait        seconds: 1.5
       screenshot  (no args; primarily useful as a diagnostic marker)
-      shell       cmd: "echo hi"     # arbitrary host shell, escape hatch
+      shell       cmd: "echo hi"  timeout: 120   # arbitrary host shell, escape hatch
     """
 
     type: str
@@ -69,6 +69,17 @@ class Step:
 
 @dataclass
 class LaunchConfig:
+    """How to start the thing under test.
+
+    ready_when:  optional readiness gate evaluated after the backend starts and
+                 before any step runs. `{log_contains: "...", timeout: 60}` —
+                 the runner polls the backend's logs until the substring
+                 appears, or fails the run with a setup error at `timeout`
+                 seconds (default 60).
+    wait_after:  unconditional sleep after launch (use ready_when when the
+                 target has a recognizable ready line).
+    """
+
     command: str | None = None
     args: list[str] = field(default_factory=list)
     url: str | None = None
@@ -126,8 +137,22 @@ def _parse_launch(raw: dict[str, Any]) -> LaunchConfig:
     if not isinstance(env, dict):
         raise ConfigError("launch.env must be a mapping")
     ready = raw.get("ready_when")
-    if ready is not None and not isinstance(ready, dict):
-        raise ConfigError("launch.ready_when must be a mapping or null")
+    if ready is not None:
+        if not isinstance(ready, dict):
+            raise ConfigError("launch.ready_when must be a mapping or null")
+        unknown = set(ready) - {"log_contains", "timeout"}
+        if unknown:
+            raise ConfigError(
+                f"launch.ready_when: unknown keys {sorted(unknown)}. "
+                "Supported: log_contains, timeout"
+            )
+        needle = ready.get("log_contains")
+        if not isinstance(needle, str) or not needle:
+            raise ConfigError(
+                "launch.ready_when requires a non-empty log_contains string"
+            )
+        if "timeout" in ready and not isinstance(ready["timeout"], (int, float)):
+            raise ConfigError("launch.ready_when.timeout must be a number")
     return LaunchConfig(
         command=raw.get("command"),
         args=list(args),

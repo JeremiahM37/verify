@@ -85,6 +85,43 @@ steps:
       url_contains: /dashboard
 ```
 
+## The `launch` block
+
+How to start the thing under test. All keys are optional; which ones matter
+depends on the backend.
+
+| Key | Meaning |
+|---|---|
+| `command` | Process to start: dev server (`web`), emulator boot (`android`), `.resc` script (`renode`), the binary itself (`linux_desktop` / `generic`) |
+| `args` | Extra argv appended to `command` |
+| `url` | Page to open after launch (`web`) |
+| `package` | App id to start on the device (`android`) |
+| `env` | Extra environment variables for `command` |
+| `cwd` | Working directory for `command` |
+| `wait_after` | Unconditional sleep (seconds) after launch |
+| `ready_when` | Readiness gate: `{ log_contains: "Server ready", timeout: 60 }` — polls the target's logs until the substring appears; the run fails with a setup error if it never does (`timeout` defaults to 60s). Prefer this over guessing a `wait_after`. |
+
+## Backend `options`
+
+Backend-specific tuning lives under `options.<backend>` and is passed to the
+backend's constructor.
+
+| Backend | Key | Default | Meaning |
+|---|---|---|---|
+| `web` | `headless` | `true` | Run Chromium headless |
+| `web` | `viewport` | `[1280, 800]` | Browser viewport size |
+| `android` | `serial` | first device | `adb -s` device serial |
+| `android` | `adb` | `adb` | Path to the adb binary |
+| `android` | `docker_image` | — | Boot the emulator in a labeled Docker sandbox (e.g. `budtmo/docker-android:emulator_14.0`) |
+| `android` | `docker_adb_port` | `5555` | adb port published from the container |
+| `android` | `docker_ready_log` | `emulator: INFO: boot completed` | Container log line that marks boot completion |
+| `android` | `docker_boot_timeout` | `300` | Seconds to wait for that log line |
+| `linux_desktop` | `display` | `:99` | Xvfb display to create |
+| `linux_desktop` | `screen_size` | `[1280, 800]` | Xvfb screen size |
+| `renode` | `monitor_port` | `1234` | Renode Monitor telnet port |
+| `renode` | `frame_analyzer` | — | Machine path of the LCD analyzer (e.g. `sysbus.lcd`); required for screenshots/vision on embedded targets |
+| `generic` | — | — | No options |
+
 ## Action vocabulary
 
 Same across every backend.
@@ -96,10 +133,20 @@ Same across every backend.
 | `type` (alias `type_text`) | `text: "..."` |
 | `key` | `name: enter / tab / back / ...` |
 | `wait` | `seconds: 1.5` |
-| `shell` | `cmd: "..."` (escape hatch; runs on host) |
+| `shell` | `cmd: "..."`, `timeout: 120` (escape hatch; runs on host) |
 
 Shorthand: any single-arg action can be written `{verb: value}` —
 `{wait: 1}`, `{type: "hello"}`, `{key: enter}`.
+
+> **Trust model**: `.verify.yaml` is executable configuration, like a Makefile
+> or an npm script. The `shell` action runs arbitrary commands on your host,
+> and `launch.command` starts whatever it names — only run configs you trust.
+> `shell` commands are killed after 120 seconds unless the step sets its own
+> `timeout:`.
+
+Steps are validated against the backend's capabilities before anything is
+launched — e.g. a `navigate` action against the `renode` backend fails
+immediately with `backend renode does not support navigate`.
 
 Step expectations:
 
@@ -110,6 +157,10 @@ expect:
   log_contains: "Server ready"    # any backend
   no_log_contains: "FATAL"        # any backend
 ```
+
+When a step fails, its screenshot is written to `.verify-artifacts/` next to
+the config (override with `verify run --artifacts-dir`), and the path is
+included in both the text and `--json` reports.
 
 ## Docker sandboxes
 
