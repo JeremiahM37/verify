@@ -21,7 +21,7 @@ from pathlib import Path
 import click
 
 from verify import __version__
-from verify.backends.registry import detect_all, get, names as backend_names
+from verify.backends.registry import detect_all, names as backend_names
 from verify.config import load
 
 

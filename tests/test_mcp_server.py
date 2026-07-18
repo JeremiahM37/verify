@@ -16,7 +16,6 @@ import pytest
 from verify import mcp_server
 from verify.backends.base import (
     Backend,
-    BackendCapabilities,
     DetectionResult,
     LaunchSpec,
 )

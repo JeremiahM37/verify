@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
-import pytest
 from click.testing import CliRunner
 
 from verify import __version__
@@ -79,7 +77,6 @@ def test_run_missing_file_errors(tmp_path):
 
 def test_run_with_fake_backend_through_runner(tmp_path, monkeypatch):
     """Patch run_verify so we exercise the CLI plumbing, not the real runner."""
-    from verify import cli as cli_mod
 
     p = tmp_path / ".verify.yaml"
     p.write_text("backend: web\nsteps: []\n")
@@ -167,7 +164,7 @@ def test_no_args_runs_default_yaml(tmp_path, monkeypatch):
 def test_full_passing_run_through_cli_with_yaml_and_fake_backend(tmp_path, monkeypatch):
     """End-to-end CLI invocation with a tiny YAML and a stub backend in the
     registry. Proves the whole CLI -> config -> runner -> exit path."""
-    from verify.backends.base import Backend, DetectionResult, LaunchSpec
+    from verify.backends.base import Backend, DetectionResult
     from verify.backends.registry import _REGISTRY
 
     class _NoopBackend(Backend):

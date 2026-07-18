@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-import io
 import json
 
 from verify.vision import (
     AnthropicVisionClient,
     OllamaVisionClient,
     StubVisionClient,
-    VisionResult,
     _extract_json,
     assert_vision,
     default_client,

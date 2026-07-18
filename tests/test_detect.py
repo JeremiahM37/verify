@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pathlib
 
-import pytest
 
 from verify.backends.android import AndroidBackend
 from verify.backends.generic import GenericBackend
