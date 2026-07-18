@@ -552,6 +552,108 @@ def test_screenshot_failure_does_not_crash_step(fake_backend, tmp_project):
     assert report.steps[0].passed
 
 
+def test_capability_check_rejects_navigate_on_non_web_backend(fake_backend, tmp_project):
+    """Runner validates steps against BackendCapabilities before starting."""
+    from verify.backends.base import BackendCapabilities
+
+    fake_backend.capabilities = lambda: BackendCapabilities(can_navigate=False)
+    cfg = parse(
+        {
+            "backend": "fake",
+            "steps": [{"name": "nav", "actions": [{"navigate": "http://x"}]}],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert not report.passed
+    assert "does not support navigate" in report.setup_error
+    assert report.steps == []
+    # Failed before start: the backend was never launched.
+    assert fake_backend.started_with is None
+
+
+def test_capability_check_rejects_selector_click_without_dom(fake_backend, tmp_project):
+    from verify.backends.base import BackendCapabilities
+
+    fake_backend.capabilities = lambda: BackendCapabilities(can_query_dom=False)
+    cfg = parse(
+        {
+            "backend": "fake",
+            "steps": [{"name": "s", "actions": [{"click": {"selector": "#x"}}]}],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert "selector click" in report.setup_error
+
+
+def test_capability_check_rejects_vision_without_screenshot(fake_backend, tmp_project):
+    from verify.backends.base import BackendCapabilities
+
+    fake_backend.capabilities = lambda: BackendCapabilities(has_screenshot=False)
+    cfg = parse(
+        {
+            "backend": "fake",
+            "steps": [
+                {
+                    "name": "look",
+                    "actions": [{"click": {"locate": {"vision": "a button"}}}],
+                    "expect": {"vision": "something visible"},
+                }
+            ],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert "vision locator" in report.setup_error
+    assert "expect.vision" in report.setup_error
+
+
+def test_capability_check_rejects_input_and_logs(fake_backend, tmp_project):
+    from verify.backends.base import BackendCapabilities
+
+    fake_backend.capabilities = lambda: BackendCapabilities(
+        has_input=False, has_logs=False
+    )
+    cfg = parse(
+        {
+            "backend": "fake",
+            "steps": [
+                {
+                    "name": "s",
+                    "actions": [{"type": "hi"}],
+                    "expect": {"log_contains": "hi"},
+                }
+            ],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert "does not support type" in report.setup_error
+    assert "log expectations" in report.setup_error
+
+
+def test_capable_backend_passes_capability_check(fake_backend, tmp_project):
+    """The default FakeBackend capabilities allow the full verb set."""
+    cfg = parse(
+        {
+            "backend": "fake",
+            "steps": [
+                {
+                    "name": "s",
+                    "actions": [
+                        {"navigate": "http://x"},
+                        {"click": {"at": [1, 1]}},
+                        {"type": "hi"},
+                        {"key": "enter"},
+                        {"screenshot": {}},
+                    ],
+                    "expect": {"log_contains": ""},
+                }
+            ],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert report.setup_error == ""
+    assert report.passed
+
+
 def test_ready_when_log_line_present_proceeds(fake_backend, tmp_project):
     """launch.ready_when gates the steps on a log line, then runs normally."""
     fake_backend.logs = "starting...\nBoot completed\n"

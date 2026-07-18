@@ -29,7 +29,15 @@ class DetectionResult:
 
 @dataclass
 class BackendCapabilities:
-    """What this backend can do. The runner uses these to validate steps."""
+    """What this backend can do. The runner validates steps against these
+    before starting the backend and fails fast with a setup error:
+
+      can_navigate:   `navigate` actions
+      can_query_dom:  selector-based `click`
+      has_input:      `click` / `type` / `key` actions
+      has_screenshot: `screenshot` actions, `expect.vision`, vision locate
+      has_logs:       `expect.log_contains` / `expect.no_log_contains`
+    """
 
     can_navigate: bool = False
     can_query_dom: bool = False
