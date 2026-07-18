@@ -15,11 +15,8 @@ import io
 import os
 import platform
 import shlex
-import shutil
 import subprocess
-import sys
 import threading
-import time
 from collections import deque
 from pathlib import Path
 

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import pathlib
 
 import pytest
 
-from verify.config import VerifyConfig, parse
+from verify.config import parse
 from verify.runner import (
     _resolve_click_coords,
     _step_needs_vision,

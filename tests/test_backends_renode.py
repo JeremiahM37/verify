@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import socket
 import subprocess
-import types
 
 import pytest
 
@@ -151,7 +149,6 @@ class _FakeMonitorSocket:
 @pytest.fixture
 def renode_mocked(monkeypatch):
     import socket as _socket
-    import subprocess
     import shutil
 
     proc = _FakeRenodeProc()

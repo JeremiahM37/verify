@@ -19,9 +19,7 @@ user — see what's on screen, decide where to tap, type, observe.
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import json
 from pathlib import Path
 from typing import Any
 

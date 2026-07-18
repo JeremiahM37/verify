@@ -12,14 +12,12 @@ would. Without a stub we'd need a paid API key in CI.
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 
 from verify.backends.web import WebBackend
 from verify.config import parse
 from verify.runner import run
-from verify.vision import VisionResult
 
 from .sample_web_app.server import SampleServer
 

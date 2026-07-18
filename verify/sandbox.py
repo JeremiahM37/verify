@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import atexit
 import json
-import os
 import shutil
 import socket
 import subprocess
@@ -37,7 +36,6 @@ import time
 import uuid
 import weakref
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 

@@ -25,6 +25,7 @@ from typing import Any, Protocol
 
 
 # Model picked for speed + cost; Opus when you really want forensic vision.
+# Override with VERIFY_VISION_MODEL.
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 # Local-vision default — small enough to run on most homelab boxes.
@@ -46,10 +47,14 @@ class VisionClient(Protocol):
 
 
 class AnthropicVisionClient:
-    """Real client. Uses the Anthropic SDK if ANTHROPIC_API_KEY is set."""
+    """Real client. Uses the Anthropic SDK if ANTHROPIC_API_KEY is set.
 
-    def __init__(self, model: str = DEFAULT_MODEL, api_key: str | None = None) -> None:
-        self.model = model
+    Configure via env or constructor:
+        VERIFY_VISION_MODEL  default claude-sonnet-4-6
+    """
+
+    def __init__(self, model: str | None = None, api_key: str | None = None) -> None:
+        self.model = model or os.environ.get("VERIFY_VISION_MODEL", DEFAULT_MODEL)
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         if not self._api_key:
             raise RuntimeError(
@@ -270,9 +275,6 @@ def locate(
     if not (0 <= x <= w and 0 <= y <= h):
         return None
     return (x, y)
-
-
-_JSON_RE = re.compile(r"\{.*?\}", re.DOTALL)
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:

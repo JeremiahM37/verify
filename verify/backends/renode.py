@@ -19,7 +19,6 @@ are expected to use the `log_contains` expect (UART).
 from __future__ import annotations
 
 import os
-import shlex
 import shutil
 import socket
 import subprocess

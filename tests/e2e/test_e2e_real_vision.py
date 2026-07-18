@@ -26,7 +26,7 @@ from verify.vision import OllamaVisionClient
 from .sample_web_app.server import SampleServer
 
 
-OLLAMA_HOST = os.environ.get("VERIFY_TEST_OLLAMA_HOST", "http://192.168.1.86:11434")
+OLLAMA_HOST = os.environ.get("VERIFY_TEST_OLLAMA_HOST", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("VERIFY_TEST_OLLAMA_MODEL", "gemma4:e4b")
 
 

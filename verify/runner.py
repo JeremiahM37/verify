@@ -9,16 +9,14 @@ The runner is intentionally narrow:
   - Collect a list of StepResult; emit overall PASS/FAIL.
 
 Failures are recorded with the screenshot at the point of failure, the vision
-rationale, and the last 100 lines of logs — so when verify reports "the
+rationale, and the last 200 lines of logs — so when verify reports "the
 keyboard input never reached the field", you can actually see why.
 """
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from verify.backends.base import Backend, LaunchSpec
 from verify.backends.registry import detect_all, get

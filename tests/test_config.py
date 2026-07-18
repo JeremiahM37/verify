@@ -6,11 +6,7 @@ import pytest
 import yaml
 
 from verify.config import (
-    Action,
     ConfigError,
-    Expect,
-    Step,
-    VerifyConfig,
     load,
     parse,
 )

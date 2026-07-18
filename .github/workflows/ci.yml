@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # `desktop` (mss) is needed by the generic-backend unit tests, which
+      # monkeypatch mss rather than touching a real display.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[test,desktop]' ruff
+
+      - name: Lint
+        run: ruff check .
+
+      # E2E tests self-skip when their prerequisites (Playwright browsers,
+      # a local Ollama, the `verify` CLI with API keys) are absent, so the
+      # stub-driven suite runs fully offline.
+      - name: Test
+        run: pytest -q
