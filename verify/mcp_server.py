@@ -37,7 +37,7 @@ def serve(*, config_path: Path) -> None:
             "mcp SDK not installed (pip install verify-cli[mcp])"
         )
     from verify.config import load
-    from verify.runner import _select_backend, _to_launch_spec
+    from verify.runner import _select_backend, _to_launch_spec, _wait_until_ready
     from verify.vision import default_client as default_vision_client
     from verify.vision import locate as vision_locate
 
@@ -48,6 +48,8 @@ def serve(*, config_path: Path) -> None:
     # session — no separate "start" call.
     _, backend = _select_backend(cfg, project_dir, None)
     backend.start(_to_launch_spec(cfg))
+    if cfg.launch.ready_when:
+        _wait_until_ready(backend, cfg.launch.ready_when)
 
     vision_client = None
 

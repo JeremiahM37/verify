@@ -552,6 +552,40 @@ def test_screenshot_failure_does_not_crash_step(fake_backend, tmp_project):
     assert report.steps[0].passed
 
 
+def test_ready_when_log_line_present_proceeds(fake_backend, tmp_project):
+    """launch.ready_when gates the steps on a log line, then runs normally."""
+    fake_backend.logs = "starting...\nBoot completed\n"
+    cfg = parse(
+        {
+            "backend": "fake",
+            "launch": {"ready_when": {"log_contains": "Boot completed"}},
+            "steps": [{"name": "x", "expect": {"log_contains": "Boot completed"}}],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert report.passed
+    # Readiness was checked via the logs before the first step ran.
+    assert fake_backend.events[0][0] == "read_logs"
+
+
+def test_ready_when_timeout_becomes_setup_error(fake_backend, tmp_project):
+    fake_backend.logs = "nothing relevant"
+    cfg = parse(
+        {
+            "backend": "fake",
+            "launch": {
+                "ready_when": {"log_contains": "Boot completed", "timeout": 0}
+            },
+            "steps": [{"name": "never runs"}],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert not report.passed
+    assert "did not appear" in report.setup_error
+    assert report.steps == []  # no step executed
+    assert fake_backend.stopped  # backend still cleaned up
+
+
 def test_report_summary_string(fake_backend, tmp_project):
     cfg = parse(
         {

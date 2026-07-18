@@ -47,6 +47,9 @@ class LaunchSpec:
       - android: `package` is the app id; `command` may start an emulator.
       - renode:  `command` is the .resc script path or platform name.
       - linux/generic: `command` is the binary; `args` extends it.
+
+    `ready_when` is handled by the runner (it polls `read_logs()` after
+    `start()` returns) — backends do not need to interpret it.
     """
 
     command: str | None = None

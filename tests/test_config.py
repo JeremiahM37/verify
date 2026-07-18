@@ -120,6 +120,30 @@ def test_rejects_non_mapping_top_level(tmp_path):
         load(p)
 
 
+def test_ready_when_unknown_key_rejected():
+    with pytest.raises(ConfigError, match="unknown keys"):
+        parse({"launch": {"ready_when": {"url_returns": 200}}})
+
+
+def test_ready_when_requires_log_contains():
+    with pytest.raises(ConfigError, match="log_contains"):
+        parse({"launch": {"ready_when": {"timeout": 5}}})
+
+
+def test_ready_when_timeout_must_be_number():
+    with pytest.raises(ConfigError, match="timeout must be a number"):
+        parse(
+            {"launch": {"ready_when": {"log_contains": "Ready", "timeout": "5s"}}}
+        )
+
+
+def test_ready_when_valid_parses():
+    cfg = parse(
+        {"launch": {"ready_when": {"log_contains": "Ready", "timeout": 30}}}
+    )
+    assert cfg.launch.ready_when == {"log_contains": "Ready", "timeout": 30}
+
+
 def test_rejects_bad_action_type():
     with pytest.raises(ConfigError, match="unknown action"):
         parse({"steps": [{"name": "x", "actions": [{"BOGUS": {}}]}]})
