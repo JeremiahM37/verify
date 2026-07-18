@@ -284,6 +284,51 @@ def test_shell_action_failure_marks_step_failed(fake_backend, tmp_project):
     assert "returned non-zero" in err or "CalledProcessError" in err
 
 
+def test_shell_action_timeout_override_kills_hung_command(fake_backend, tmp_project):
+    """`timeout:` in the YAML bounds the shell command's runtime."""
+    import time as _time
+
+    cfg = parse(
+        {
+            "backend": "fake",
+            "steps": [
+                {
+                    "name": "hang",
+                    "actions": [{"shell": {"cmd": "sleep 30", "timeout": 0.2}}],
+                }
+            ],
+        }
+    )
+    t0 = _time.monotonic()
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert _time.monotonic() - t0 < 5
+    assert not report.passed
+    assert "TimeoutExpired" in report.steps[0].actions[0].error
+
+
+def test_shell_action_default_timeout_is_120s(fake_backend, tmp_project, monkeypatch):
+    """Without an explicit timeout, the runner passes 120s to subprocess."""
+    import subprocess
+
+    captured = {}
+    real_run = subprocess.run
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    cfg = parse(
+        {
+            "backend": "fake",
+            "steps": [{"name": "x", "actions": [{"shell": {"cmd": "true"}}]}],
+        }
+    )
+    report = run(cfg, tmp_project, backend=fake_backend)
+    assert report.passed
+    assert captured["timeout"] == 120.0
+
+
 def test_shell_action_without_cmd_raises(fake_backend, tmp_project):
     cfg = parse(
         {

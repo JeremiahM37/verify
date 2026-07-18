@@ -37,7 +37,7 @@ class Action:
       key         name: "enter"
       wait        seconds: 1.5
       screenshot  (no args; primarily useful as a diagnostic marker)
-      shell       cmd: "echo hi"     # arbitrary host shell, escape hatch
+      shell       cmd: "echo hi"  timeout: 120   # arbitrary host shell, escape hatch
     """
 
     type: str

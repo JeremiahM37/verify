@@ -324,9 +324,12 @@ def _run_action(
             cmd = action.args.get("cmd")
             if not cmd:
                 raise ValueError("shell requires cmd")
+            # Default timeout keeps a hung command from stalling the whole
+            # run forever; per-step override via `timeout:` in the YAML.
+            timeout = float(action.args.get("timeout", 120.0))
             import subprocess
 
-            subprocess.run(cmd, shell=True, check=True)
+            subprocess.run(cmd, shell=True, check=True, timeout=timeout)
         else:
             raise ValueError(f"runner has no handler for action {action.type!r}")
         return ActionResult(action=action, ok=True)
