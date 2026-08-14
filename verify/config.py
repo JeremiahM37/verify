@@ -21,6 +21,8 @@ from typing import Any
 
 import yaml
 
+from verify import readiness
+
 
 # ---- action types ----------------------------------------------------------
 
@@ -72,10 +74,12 @@ class LaunchConfig:
     """How to start the thing under test.
 
     ready_when:  optional readiness gate evaluated after the backend starts and
-                 before any step runs. `{log_contains: "...", timeout: 60}` —
-                 the runner polls the backend's logs until the substring
-                 appears, or fails the run with a setup error at `timeout`
-                 seconds (default 60).
+                 before any step runs. Give `log_contains` (a substring of the
+                 target's own log output), `url` (an http endpoint polled until
+                 it answers), or both — both must then hold. Fails the run with
+                 a setup error at `timeout` seconds (default 60). Use `url` for
+                 a target whose logs are quiet or buffered, and `log_contains`
+                 for one with no http surface.
     wait_after:  unconditional sleep after launch (use ready_when when the
                  target has a recognizable ready line).
     """
@@ -140,17 +144,23 @@ def _parse_launch(raw: dict[str, Any]) -> LaunchConfig:
     if ready is not None:
         if not isinstance(ready, dict):
             raise ConfigError("launch.ready_when must be a mapping or null")
-        unknown = set(ready) - {"log_contains", "timeout"}
+        unknown = set(ready) - readiness.KEYS
         if unknown:
             raise ConfigError(
                 f"launch.ready_when: unknown keys {sorted(unknown)}. "
-                "Supported: log_contains, timeout"
+                f"Supported: {', '.join(sorted(readiness.KEYS))}"
             )
-        needle = ready.get("log_contains")
-        if not isinstance(needle, str) or not needle:
+        # at least one condition, or the gate silently does nothing — which is
+        # the failure mode this key was added to fix
+        if "log_contains" not in ready and "url" not in ready:
             raise ConfigError(
-                "launch.ready_when requires a non-empty log_contains string"
+                "launch.ready_when needs log_contains or url (or both)"
             )
+        for key in ("log_contains", "url"):
+            if key in ready and (not isinstance(ready[key], str) or not ready[key]):
+                raise ConfigError(
+                    f"launch.ready_when.{key} must be a non-empty string"
+                )
         if "timeout" in ready and not isinstance(ready["timeout"], (int, float)):
             raise ConfigError("launch.ready_when.timeout must be a number")
     return LaunchConfig(

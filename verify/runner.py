@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from verify import readiness
 from verify.backends.base import Backend, LaunchSpec
 from verify.backends.registry import detect_all, get
 from verify.config import Action, Expect, Step, VerifyConfig
@@ -145,7 +146,8 @@ def run(
     try:
         backend_obj.start(_to_launch_spec(config))
         if config.launch.ready_when:
-            _wait_until_ready(backend_obj, config.launch.ready_when)
+            readiness.wait_for(config.launch.ready_when,
+                               read_logs=lambda: backend_obj.read_logs(lines=1000))
     except Exception as e:
         report.setup_error = f"backend start failed: {e}"
         # Ensure partial resources (e.g. a started Playwright instance) are
@@ -204,26 +206,6 @@ def _capability_errors(name, caps, steps: list[Step]) -> list[str]:
             ) and not caps.has_logs:
                 bad("cannot evaluate log expectations (no logs)")
     return errors
-
-
-def _wait_until_ready(backend: Backend, ready_when: dict[str, Any]) -> None:
-    """Block until `launch.ready_when` is satisfied.
-
-    Polls the backend's logs until `log_contains` appears; raises TimeoutError
-    after `timeout` seconds (default 60). The needle is checked at least once
-    even with a zero timeout.
-    """
-    needle = ready_when["log_contains"]
-    timeout = float(ready_when.get("timeout", 60.0))
-    deadline = time.monotonic() + timeout
-    while True:
-        if needle in backend.read_logs(lines=1000):
-            return
-        if time.monotonic() >= deadline:
-            raise TimeoutError(
-                f"ready_when: {needle!r} did not appear in logs within {timeout:g}s"
-            )
-        time.sleep(0.25)
 
 
 def _step_needs_vision(s: Step) -> bool:

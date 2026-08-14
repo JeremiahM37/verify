@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from verify import readiness
 from verify.backends.base import (
     Backend,
     BackendCapabilities,
@@ -72,6 +73,16 @@ class WebBackend(Backend):
     def start(self, spec: LaunchSpec) -> None:
         if spec.command:
             self._start_dev_server(spec)
+            # A url gate has to be satisfied BEFORE the first navigate, and this
+            # backend navigates during start() — the runner's gate runs after
+            # start() returns, by which point the browser has already failed to
+            # load. The log_contains half is left to the runner, which owns log
+            # access; passing the process here also lets a dead spawn fail fast.
+            if spec.ready_when and spec.ready_when.get("url"):
+                readiness.wait_for(
+                    {k: v for k, v in spec.ready_when.items() if k != "log_contains"},
+                    proc=self._proc,
+                )
         self._start_browser()
         if spec.url:
             self.navigate(spec.url)
