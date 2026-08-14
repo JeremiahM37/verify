@@ -25,8 +25,8 @@ from typing import Any, Protocol
 
 
 # Model picked for speed + cost; Opus when you really want forensic vision.
-# Override with VERIFY_VISION_MODEL.
-DEFAULT_MODEL = "claude-sonnet-4-6"
+# Overridable because hardcoded model ids rot as generations retire.
+DEFAULT_MODEL = os.environ.get("VERIFY_ANTHROPIC_MODEL", "claude-sonnet-5")
 
 # Local-vision default — small enough to run on most homelab boxes.
 DEFAULT_OLLAMA_MODEL = "gemma4:e4b"
@@ -47,14 +47,10 @@ class VisionClient(Protocol):
 
 
 class AnthropicVisionClient:
-    """Real client. Uses the Anthropic SDK if ANTHROPIC_API_KEY is set.
+    """Real client. Uses the Anthropic SDK if ANTHROPIC_API_KEY is set."""
 
-    Configure via env or constructor:
-        VERIFY_VISION_MODEL  default claude-sonnet-4-6
-    """
-
-    def __init__(self, model: str | None = None, api_key: str | None = None) -> None:
-        self.model = model or os.environ.get("VERIFY_VISION_MODEL", DEFAULT_MODEL)
+    def __init__(self, model: str = DEFAULT_MODEL, api_key: str | None = None) -> None:
+        self.model = model
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         if not self._api_key:
             raise RuntimeError(
@@ -118,26 +114,34 @@ class OllamaVisionClient:
         self.timeout = timeout
 
     def ask(self, image_png: bytes, prompt: str, *, max_tokens: int = 400) -> str:
-        # Local models (esp. small ones) occasionally return an empty completion.
-        # One retry is cheap and turns flaky into reliable.
+        # Two failure modes of local models, both handled here:
+        #  - thinking models (gemma4, qwen3) burn the whole num_predict budget on
+        #    hidden reasoning and return an empty completion → send "think": false
+        #    (fall back without it for servers/models that reject the param)
+        #  - small models occasionally return an empty completion anyway → retry
         last = ""
-        for attempt in range(2):
-            body = json.dumps(
-                {
-                    "model": self.model,
-                    "prompt": prompt,
-                    "images": [base64.b64encode(image_png).decode()],
-                    "stream": False,
-                    "options": {"num_predict": max_tokens, "temperature": 0},
-                }
-            ).encode()
+        for attempt in range(3):
+            payload = {
+                "model": self.model,
+                "prompt": prompt,
+                "images": [base64.b64encode(image_png).decode()],
+                "stream": False,
+                "options": {"num_predict": max_tokens, "temperature": 0},
+            }
+            if attempt < 2:
+                payload["think"] = False
             req = urllib.request.Request(
                 f"{self.host}/api/generate",
-                data=body,
+                data=json.dumps(payload).encode(),
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                resp = json.loads(r.read())
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    resp = json.loads(r.read())
+            except urllib.error.HTTPError:
+                if attempt < 2:
+                    continue   # server rejected "think" — retry without it
+                raise
             last = resp.get("response", "")
             if last.strip():
                 return last
@@ -275,6 +279,9 @@ def locate(
     if not (0 <= x <= w and 0 <= y <= h):
         return None
     return (x, y)
+
+
+_JSON_RE = re.compile(r"\{.*?\}", re.DOTALL)
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
