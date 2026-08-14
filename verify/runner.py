@@ -18,10 +18,8 @@ in both the text and JSON reports.
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from verify import readiness
 from verify.backends.base import Backend, LaunchSpec
