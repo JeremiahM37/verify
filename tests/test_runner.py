@@ -20,12 +20,15 @@ def _cfg(**overrides):
     return parse(base)
 
 
-def test_run_no_steps_passes(fake_backend, tmp_project):
+def test_run_no_steps_fails_before_backend_start(fake_backend, tmp_project):
     cfg = _cfg()
     report = run(cfg, tmp_project, backend=fake_backend)
-    assert report.passed
+    assert not report.passed
     assert report.steps == []
-    assert fake_backend.stopped
+    assert "no runnable steps" in report.setup_error
+    assert "Legacy `checks:`" in report.setup_error
+    assert fake_backend.started_with is None
+    assert not fake_backend.stopped
 
 
 def test_run_passes_actions_to_backend(fake_backend, tmp_project):
@@ -227,7 +230,7 @@ def test_step_needs_vision_detection():
 
 def test_unknown_backend_lands_in_setup_error(tmp_project):
     # "fake" is not registered; selection failure becomes setup_error.
-    cfg = parse({"backend": "fake", "steps": []})
+    cfg = parse({"backend": "fake", "steps": [{"name": "selection"}]})
     report = run(cfg, tmp_project)
     assert not report.passed
     assert "backend selection failed" in report.setup_error
@@ -445,7 +448,7 @@ def test_auto_detect_with_no_available_backend_raises(tmp_project, monkeypatch):
             )
         ],
     )
-    cfg = parse({"backend": "auto", "steps": []})
+    cfg = parse({"backend": "auto", "steps": [{"name": "selection"}]})
     report = run(cfg, tmp_project)
     assert report.setup_error
     assert "auto-detect" in report.setup_error or "available" in report.setup_error
@@ -493,7 +496,7 @@ def test_configured_backend_unavailable(tmp_project, monkeypatch):
 
     _REGISTRY["missing"] = _MissingBackend
     try:
-        cfg = parse({"backend": "missing", "steps": []})
+        cfg = parse({"backend": "missing", "steps": [{"name": "selection"}]})
         report = run(cfg, tmp_project)
         assert report.setup_error
         assert "frobulator" in report.setup_error
@@ -567,7 +570,7 @@ def test_options_are_passed_through_to_backend_constructor(tmp_project, monkeypa
             {
                 "backend": "opts-bk",
                 "options": {"opts-bk": {"foo": 1, "bar": "two"}},
-                "steps": [],
+                "steps": [{"name": "constructor options"}],
             }
         )
         report = run(cfg, tmp_project)

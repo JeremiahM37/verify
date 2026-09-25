@@ -344,6 +344,8 @@ def _print_report(report, screenshots: dict[int, Path] | None = None) -> None:
                 click.echo(
                     f"      vision: {'PASS' if v.passed else 'FAIL'} — {v.reason}"
                 )
+            if s.expect.vision_error:
+                click.echo(f"      vision: FAIL — {s.expect.vision_error}")
             if s.expect.url_ok is False:
                 click.echo(f"      url: {s.expect.url_actual}")
             if s.expect.log_ok is False:
@@ -383,6 +385,7 @@ def _report_to_json(report, screenshots: dict[int, Path] | None = None) -> str:
                                 if s.expect.vision
                                 else None
                             ),
+                            "vision_error": s.expect.vision_error,
                             "url_ok": s.expect.url_ok,
                             "url_actual": s.expect.url_actual,
                             "log_ok": s.expect.log_ok,

@@ -266,9 +266,21 @@ def _parse_expect(raw: Any) -> Expect | None:
         return None
     if not isinstance(raw, dict):
         raise ConfigError("expect must be a mapping or null")
-    return Expect(
-        vision=raw.get("vision"),
-        url_contains=raw.get("url_contains"),
-        log_contains=raw.get("log_contains"),
-        no_log_contains=raw.get("no_log_contains"),
-    )
+    supported = {"vision", "url_contains", "log_contains", "no_log_contains"}
+    unknown = set(raw) - supported
+    if unknown:
+        # repr-based ordering is deterministic and remains safe for YAML keys
+        # of mixed types (which cannot be compared directly in Python 3).
+        keys = ", ".join(sorted((repr(key) for key in unknown)))
+        raise ConfigError(
+            f"expect: unknown keys {keys}. Supported: {', '.join(sorted(supported))}"
+        )
+    values = {}
+    for key in sorted(supported):
+        value = raw.get(key)
+        if value is not None and not isinstance(value, str):
+            raise ConfigError(
+                f"expect.{key} must be a string or null, got {type(value).__name__}"
+            )
+        values[key] = value
+    return Expect(**values)

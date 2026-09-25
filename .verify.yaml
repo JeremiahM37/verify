@@ -1,0 +1,15 @@
+backend: web
+launch:
+  url: about:blank
+options:
+  web:
+    headless: true
+steps:
+  - name: full unit, CLI and real-browser integration suite
+    actions:
+      - shell:
+          cmd: python -m pytest -q
+          timeout: 180
+  - name: source patch formatting
+    actions:
+      - shell: git diff --check

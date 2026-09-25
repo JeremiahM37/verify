@@ -85,6 +85,21 @@ steps:
       url_contains: /dashboard
 ```
 
+### Failure reporting and configuration validation
+
+An empty or missing `steps` list fails before a backend starts. The legacy
+`checks` format does not execute checks; migrate it to `steps` rather than
+accepting a zero-step success. Unknown expectation keys and non-string
+expectations are rejected, so typos and YAML values such as unquoted `no` cannot
+silently disable a check.
+
+A required vision expectation fails if its screenshot or vision client is
+unavailable. Text and JSON reports include the cause as `vision_error`. Model
+verdicts must use JSON booleans, and model-provided click coordinates must be
+integer pixels inside the screen. Malformed values do not count as success or
+dispatch a click. Incidental screenshots remain optional for steps without a
+vision expectation.
+
 ## The `launch` block
 
 How to start the thing under test. All keys are optional; which ones matter

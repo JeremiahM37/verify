@@ -122,14 +122,14 @@ def test_detect_no_match_exits_2(tmp_path, monkeypatch):
 
 
 def test_run_prints_setup_error(tmp_path, monkeypatch):
-    """Runner failures should be printed to stdout and exit non-zero."""
+    """Backend selection failures should print their diagnostic and exit non-zero."""
     p = tmp_path / ".verify.yaml"
-    p.write_text("backend: nonexistent\nsteps: []\n")
+    p.write_text("backend: nonexistent\nsteps:\n  - name: selection\n")
     # Don't monkeypatch — let the real runner produce setup_error via the
     # backend-selection failure path we fixed earlier.
     r = CliRunner().invoke(main, ["run", str(p)])
     assert r.exit_code != 0
-    assert "setup error" in r.output or "FAIL" in r.output
+    assert "backend selection failed" in r.output
 
 
 def test_init_prints_what_was_written(tmp_path):

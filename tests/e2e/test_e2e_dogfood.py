@@ -110,7 +110,7 @@ def test_run_missing_file_exits_nonzero(tmp_path):
 def test_run_unknown_backend_returns_structured_failure(tmp_path):
     """Selection failures land in setup_error and exit 1, not traceback."""
     cfg = tmp_path / ".verify.yaml"
-    cfg.write_text("backend: nonexistent-thing\nsteps: []\n")
+    cfg.write_text("backend: nonexistent-thing\nsteps:\n  - name: selection\n")
     r = _run("run", str(cfg))
     assert r.returncode == 1
     # Should be a clean diagnostic, not a Python traceback.
@@ -120,7 +120,7 @@ def test_run_unknown_backend_returns_structured_failure(tmp_path):
 
 def test_run_json_output_is_valid_json(tmp_path):
     cfg = tmp_path / ".verify.yaml"
-    cfg.write_text("backend: nonexistent-thing\nsteps: []\n")
+    cfg.write_text("backend: nonexistent-thing\nsteps:\n  - name: selection\n")
     r = _run("run", str(cfg), "--json")
     # JSON mode should still emit JSON even on failure.
     assert r.stdout.strip().startswith("{")

@@ -251,8 +251,14 @@ def assert_vision(client: VisionClient, image_png: bytes, expectation: str) -> V
         return VisionResult(
             passed=False, reason=f"vision response not JSON: {raw[:200]}", raw=raw
         )
+    if type(parsed.get("pass")) is not bool:
+        return VisionResult(
+            passed=False,
+            reason="vision response 'pass' must be a JSON boolean true or false",
+            raw=raw,
+        )
     return VisionResult(
-        passed=bool(parsed.get("pass")),
+        passed=parsed["pass"],
         reason=str(parsed.get("reason", "")),
         raw=raw,
     )
@@ -269,14 +275,16 @@ def locate(
         image_png, _LOCATE_PROMPT.format(description=description, width=w, height=h)
     )
     parsed = _extract_json(raw)
-    if not parsed or not parsed.get("found"):
+    if not parsed or type(parsed.get("found")) is not bool or not parsed["found"]:
         return None
-    try:
-        x = int(parsed["x"])
-        y = int(parsed["y"])
-    except (KeyError, TypeError, ValueError):
+    x = parsed.get("x")
+    y = parsed.get("y")
+    # Coordinates are model-produced pixel indices. Do not coerce JSON values:
+    # in particular, bool is an int subclass in Python, and truncating a float
+    # can turn an out-of-image point into a click on a different pixel.
+    if type(x) is not int or type(y) is not int:
         return None
-    if not (0 <= x <= w and 0 <= y <= h):
+    if not (0 <= x < w and 0 <= y < h):
         return None
     return (x, y)
 

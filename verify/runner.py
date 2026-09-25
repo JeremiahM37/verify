@@ -44,6 +44,7 @@ class ActionResult:
 @dataclass
 class ExpectResult:
     vision: VisionResult | None = None
+    vision_error: str = ""
     url_ok: bool | None = None
     url_actual: str | None = None
     log_ok: bool | None = None
@@ -51,6 +52,8 @@ class ExpectResult:
 
     @property
     def passed(self) -> bool:
+        if self.vision_error:
+            return False
         if self.vision is not None and not self.vision.passed:
             return False
         if self.url_ok is False:
@@ -87,7 +90,7 @@ class RunReport:
 
     @property
     def passed(self) -> bool:
-        if self.setup_error:
+        if self.setup_error or not self.steps:
             return False
         return all(s.passed for s in self.steps)
 
@@ -112,6 +115,15 @@ def run(
 
     `backend` and `vision` are optional injection points for testing.
     """
+
+    if not config.steps:
+        return RunReport(
+            backend=config.backend,
+            setup_error=(
+                "configuration has no runnable steps; add at least one step. "
+                "Legacy `checks:` entries are not executed; use `steps:`."
+            ),
+        )
 
     try:
         backend_name, backend_obj = _select_backend(config, project_dir, backend)
@@ -256,6 +268,7 @@ def _to_launch_spec(config: VerifyConfig) -> LaunchSpec:
 
 def _run_step(backend: Backend, step: Step, vision: VisionClient | None) -> StepResult:
     sr = StepResult(step=step)
+    screenshot_error = ""
     try:
         for action in step.actions:
             ar = _run_action(backend, action, vision)
@@ -265,10 +278,13 @@ def _run_step(backend: Backend, step: Step, vision: VisionClient | None) -> Step
         # Even if an action failed, still try to screenshot for the report.
         try:
             sr.screenshot_png = backend.screenshot()
-        except Exception:
+        except Exception as e:
             sr.screenshot_png = None
+            screenshot_error = str(e) or repr(e)
         if step.expect is not None:
-            sr.expect = _evaluate_expect(backend, step.expect, sr.screenshot_png, vision)
+            sr.expect = _evaluate_expect(
+                backend, step.expect, sr.screenshot_png, vision, screenshot_error
+            )
     except Exception as e:
         sr.error = repr(e)
     return sr
@@ -353,10 +369,20 @@ def _evaluate_expect(
     expect: Expect,
     screenshot: bytes | None,
     vision: VisionClient | None,
+    screenshot_error: str = "",
 ) -> ExpectResult:
     out = ExpectResult()
-    if expect.vision and screenshot is not None and vision is not None:
-        out.vision = assert_vision(vision, screenshot, expect.vision)
+    if expect.vision:
+        if screenshot is None:
+            detail = screenshot_error or "backend returned no screenshot"
+            out.vision_error = (
+                "vision expectation unavailable: screenshot capture failed: "
+                f"{detail}"
+            )
+        elif vision is None:
+            out.vision_error = "vision expectation unavailable: no vision client is available"
+        else:
+            out.vision = assert_vision(vision, screenshot, expect.vision)
     if expect.url_contains is not None:
         try:
             url = backend.current_url()  # type: ignore[attr-defined]
